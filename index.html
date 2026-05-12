@@ -1,0 +1,1767 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<meta name="theme-color" content="#2c3e50">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" type="image/svg+xml" href="icon.svg">
+<link rel="apple-touch-icon" href="icon.svg">
+<title>Task Tree</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; height: 100%; width: 100%;
+    font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "ヒラギノ角ゴ ProN", "Yu Gothic", sans-serif;
+    background: #faf8f5;
+    overflow: hidden;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+  }
+  #toolbar {
+    position: fixed; top: 0; left: 0; right: 0;
+    background: rgba(250, 248, 245, 0.92);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border-bottom: 1px solid #e5e0d8;
+    padding: 8px 10px;
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    z-index: 10;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    flex-wrap: nowrap;
+  }
+  .group { display: flex; gap: 6px; align-items: center; flex-shrink: 0; }
+  .divider { width: 1px; height: 22px; background: #ddd5c8; flex-shrink: 0; }
+  .btn {
+    background: white;
+    border: 1px solid #ddd5c8;
+    border-radius: 8px;
+    padding: 7px 11px;
+    font-size: 13px;
+    font-family: inherit;
+    color: #2c3e50;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: transform 0.05s, background 0.1s;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .btn:hover:not(:disabled) { background: #f3eee4; }
+  .btn:active:not(:disabled) { transform: scale(0.96); }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .btn.primary { background: #2c3e50; color: white; border-color: #2c3e50; }
+  .btn.primary:hover:not(:disabled) { background: #3a516b; }
+  .btn.accent { background: #2563eb; color: white; border-color: #2563eb; }
+  .btn.accent:hover:not(:disabled) { background: #1d4ed8; }
+  .btn.danger { color: #b03a2e; }
+  .btn.icon { padding: 7px 9px; font-size: 15px; }
+  .hint {
+    font-size: 11px;
+    color: #999;
+    white-space: nowrap;
+    padding: 0 6px;
+  }
+  @media (max-width: 1200px) { .hint { display: none; } }
+  svg#canvas {
+    position: fixed; inset: 0;
+    width: 100vw; height: 100vh;
+    display: block;
+    touch-action: none;
+    cursor: grab;
+  }
+  svg#canvas.grabbing { cursor: grabbing; }
+  svg#canvas.dragging-node { cursor: move; }
+  .node-rect {
+    cursor: grab;
+    fill: white;
+    stroke: #b8bfc8;
+    stroke-width: 1.5;
+    transition: stroke 0.1s;
+  }
+  .node-rect.done {
+    fill: #e8f5e8;
+    stroke: #16a34a;
+  }
+  .node-rect.alert-risk {
+    stroke: #d97706;
+    stroke-width: 2.5;
+  }
+  .node-rect.alert-overdue {
+    stroke: #dc2626;
+    stroke-width: 2.5;
+    fill: #fef2f2;
+  }
+  .node-rect.selected {
+    stroke: #2563eb;
+    stroke-width: 3;
+  }
+  .node-rect.selected.alert-risk { stroke: #d97706; }
+  .node-rect.selected.alert-overdue { stroke: #dc2626; }
+  .node-rect.reparent-target {
+    stroke: #16a34a;
+    stroke-width: 3;
+    stroke-dasharray: 6 3;
+  }
+  .node-text { pointer-events: none; font-family: inherit; font-size: 13px; fill: #2c3e50; }
+  .node-text.done { text-decoration: line-through; opacity: 0.6; }
+  .meta-text { pointer-events: none; font-family: inherit; font-size: 10px; opacity: 0.78; fill: #475569; }
+  .meta-text.risk { fill: #b45309; }
+  .meta-text.overdue { fill: #dc2626; }
+  .meta-text.placeholder { fill: #b9c1c9; }
+  .level-badge { pointer-events: none; font-family: inherit; font-size: 9px; font-weight: 700; fill: #94a3b8; }
+  .check-bg, .check-mark, .pie-fill { transition: fill 0.1s; }
+  .check-hit { cursor: pointer; fill: transparent; }
+  .name-hit { cursor: text; fill: transparent; }
+  .pct-hit, .due-hit { cursor: pointer; fill: transparent; }
+  .progress-bg, .progress-fill { pointer-events: none; }
+  .edge { fill: none; stroke: #cbd5d8; stroke-width: 2; opacity: 0.7; pointer-events: none; }
+  .edge.done { stroke: #16a34a; opacity: 0.45; }
+  .edge-hit { cursor: pointer; }
+  .edge-hit:hover + .edge { stroke: #dc2626; opacity: 1; }
+
+  /* Inline editors */
+  #editor, #share-editor-wrap, #due-editor {
+    position: fixed;
+    display: none;
+    background: white;
+    border: 2px solid #2563eb;
+    border-radius: 8px;
+    font-family: inherit;
+    color: #2c3e50;
+    z-index: 20;
+    outline: none;
+    box-shadow: 0 4px 18px rgba(0,0,0,0.12);
+  }
+  #editor {
+    padding: 4px 10px 4px 36px;
+    font-size: 16px;
+    min-width: 160px;
+  }
+  #share-editor-wrap {
+    padding: 4px 8px;
+    align-items: center;
+    gap: 8px;
+  }
+  #share-editor-wrap.visible { display: inline-flex; }
+  .share-editor-label {
+    font-size: 11px;
+    color: #475569;
+    white-space: nowrap;
+    font-weight: 600;
+  }
+  #share-editor {
+    width: 70px;
+    padding: 4px 6px;
+    font-size: 14px;
+    font-family: inherit;
+    color: #2c3e50;
+    border: 1px solid #ddd5c8;
+    border-radius: 4px;
+    outline: none;
+    text-align: right;
+    background: white;
+  }
+  #due-editor {
+    padding: 4px 8px;
+    font-size: 14px;
+    min-width: 150px;
+  }
+
+  #status {
+    position: fixed;
+    bottom: 70px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(44, 62, 80, 0.88);
+    color: white;
+    padding: 5px 12px;
+    border-radius: 6px;
+    font-size: 11px;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.2s;
+    z-index: 15;
+    max-width: 90vw;
+  }
+  #status.show { opacity: 1; }
+  #props {
+    position: fixed; bottom: 0; left: 0; right: 0;
+    background: rgba(250, 248, 245, 0.95);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border-top: 1px solid #e5e0d8;
+    padding: 8px 12px;
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    font-size: 13px;
+    z-index: 9;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    flex-wrap: nowrap;
+    color: #2c3e50;
+  }
+  #props.hidden { display: none; }
+  #props .label { color: #888; font-size: 11px; }
+  #props input[type="number"] {
+    width: 64px; padding: 5px 8px;
+    font-size: 14px;
+    border: 1px solid #ddd5c8;
+    border-radius: 6px;
+    font-family: inherit;
+    background: white;
+  }
+  #props input[type="number"]:disabled { background: #f1f1ee; color: #999; }
+  #props input[type="date"] {
+    padding: 4px 6px; font-size: 13px;
+    border: 1px solid #ddd5c8;
+    border-radius: 6px;
+    font-family: inherit;
+    background: white;
+    color: #2c3e50;
+  }
+  #props .stat { font-weight: 600; }
+  #props .stat.dim { font-weight: 400; color: #888; }
+  #props .small-btn {
+    background: white; border: 1px solid #ddd5c8;
+    border-radius: 6px; padding: 4px 8px;
+    font-family: inherit; font-size: 12px;
+    color: #2c3e50; cursor: pointer;
+  }
+  .status-chip {
+    display: inline-block;
+    padding: 3px 8px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .status-chip.ok { background: #dcfce7; color: #15803d; }
+  .status-chip.risk { background: #fef3c7; color: #b45309; }
+  .status-chip.overdue { background: #fee2e2; color: #b91c1c; }
+  .status-chip.done { background: #e0e7ff; color: #3730a3; }
+  .status-chip.none { background: #f1f1ee; color: #777; }
+  .level-pill {
+    background: #e0e7ff;
+    color: #3730a3;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 700;
+  }
+
+  /* Parent-choice modal */
+  #modal-backdrop {
+    position: fixed; inset: 0;
+    background: rgba(20, 25, 35, 0.45);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 30;
+    padding: 20px;
+  }
+  #modal-backdrop.hidden { display: none; }
+  #modal {
+    background: white;
+    border-radius: 14px;
+    padding: 22px 24px;
+    min-width: 320px;
+    max-width: 460px;
+    box-shadow: 0 16px 50px rgba(0,0,0,0.3);
+    color: #2c3e50;
+  }
+  .modal-title { font-weight: 700; font-size: 16px; margin-bottom: 8px; }
+  .modal-body { color: #475569; margin-bottom: 18px; font-size: 14px; line-height: 1.5; }
+  .modal-buttons { display: flex; flex-direction: column; gap: 8px; }
+  .modal-buttons button {
+    padding: 11px 14px;
+    border-radius: 8px;
+    border: 1px solid #ddd5c8;
+    background: white;
+    font-family: inherit;
+    font-size: 13px;
+    cursor: pointer;
+    color: #2c3e50;
+    text-align: left;
+    transition: background 0.1s;
+  }
+  .modal-buttons button:hover { background: #f3eee4; }
+  .modal-buttons button.primary { background: #2c3e50; color: white; border-color: #2c3e50; }
+  .modal-buttons button.primary:hover { background: #3a516b; }
+  .modal-buttons button.cancel { color: #888; text-align: center; }
+</style>
+</head>
+<body>
+<div id="toolbar">
+  <div class="group">
+    <button class="btn icon" id="btn-undo" title="元に戻す (Cmd+Z)">↶</button>
+  </div>
+  <div class="divider"></div>
+  <div class="group">
+    <button class="btn accent"  id="btn-add-toplevel" title="新しい独立タスク (序列0)">＋新規</button>
+    <button class="btn primary" id="btn-add-child"   title="Tab">＋子</button>
+    <button class="btn"         id="btn-add-sibling" title="Enter">＋兄弟</button>
+    <button class="btn"         id="btn-edit"        title="F2">編集</button>
+    <button class="btn danger"  id="btn-delete"      title="Delete">削除</button>
+  </div>
+  <div class="divider"></div>
+  <div class="group">
+    <button class="btn" id="btn-fit">全体表示</button>
+    <button class="btn" id="btn-reset">リセット</button>
+  </div>
+  <span class="hint">名前=Wクリック ・%/期日=タップ ・◯=完了 ・ドラッグ=移動 ・重ねて親変更 ・線=連携解除</span>
+</div>
+
+<svg id="canvas">
+  <g id="viewport"></g>
+  <g id="effects" style="pointer-events:none"></g>
+</svg>
+
+<input id="editor"        type="text"   autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+<div id="share-editor-wrap">
+  <span class="share-editor-label">重要度</span>
+  <input id="share-editor" type="number" min="5" max="100" step="5">
+</div>
+<input id="due-editor"    type="date">
+<div id="status"></div>
+
+<div id="props" class="hidden">
+  <span class="level-pill" id="prop-level">L0</span>
+  <span class="label">重要度</span>
+  <input type="number" id="prop-share-input" min="5" max="100" step="5" value="100">
+  <span class="stat dim" id="prop-share-display">占有率 —</span>
+  <span class="divider"></span>
+  <span class="label">期日</span>
+  <input type="date" id="prop-due">
+  <button class="small-btn" id="prop-due-clear" title="期日をクリア">×</button>
+  <span class="divider"></span>
+  <span class="stat" id="prop-progress">進捗 —</span>
+  <span class="status-chip none" id="prop-status">—</span>
+</div>
+
+<div id="modal-backdrop" class="hidden">
+  <div id="modal">
+    <div class="modal-title" id="modal-title">同じ序列のタスクです</div>
+    <div class="modal-body" id="modal-body-text"></div>
+    <div class="modal-buttons">
+      <button class="primary" id="modal-btn-target"></button>
+      <button id="modal-btn-dragged"></button>
+      <button class="cancel" id="modal-btn-cancel">キャンセル</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  const NS = 'http://www.w3.org/2000/svg';
+  const KEY = 'tasktree_v5';
+  const OLD_KEYS = ['tasktree_v4', 'tasktree_v3', 'tasktree_v2', 'tasktree_v1'];
+  const VROOT = '__vroot__';
+
+  const NODE_H = 46;
+  const NODE_PAD_LEFT = 32;
+  const NODE_PAD_RIGHT = 16;
+  const NODE_MIN_W = 130;
+  const SPAWN_DIST = 240;
+  const MIN_NODE_GAP = 18;
+  const RISK_THRESHOLD = 0.15;
+  const UNDO_LIMIT = 50;
+  const DBL_TAP_MS = 350;
+  const PCT_HIT_W = 50;
+  const LEVEL_W = 26;
+
+  let tree;
+  let selectedId;
+  let nextId = 1;
+  let pan = { x: 0, y: 0 };
+  let zoom = 1;
+
+  const defaultTree = () => ({ id: VROOT, _isVirtualRoot: true, children: [] });
+  const isVirtualRoot = (node) => node && node._isVirtualRoot === true;
+
+  function save() {
+    try { localStorage.setItem(KEY, JSON.stringify({ tree, nextId, pan, zoom, selectedId, weightScale: 100 })); } catch (_) {}
+  }
+  function migrateWeightsTo100(node) {
+    if (!isVirtualRoot(node) && typeof node.weight === 'number') {
+      node.weight = node.weight * 100;
+    }
+    for (const c of node.children) migrateWeightsTo100(c);
+  }
+  function load() {
+    let raw = null;
+    try { raw = localStorage.getItem(KEY); } catch (_) {}
+    if (raw) {
+      try {
+        const obj = JSON.parse(raw);
+        tree = obj.tree; nextId = obj.nextId || 1;
+        pan = obj.pan || { x: 0, y: 0 };
+        zoom = obj.zoom || 1;
+        selectedId = obj.selectedId || null;
+        sanitize(tree); wrapAsVirtualRootIfNeeded();
+        if (obj.weightScale !== 100) { migrateWeightsTo100(tree); save(); }
+        return;
+      } catch (_) {}
+    }
+    for (const k of OLD_KEYS) {
+      try {
+        const old = localStorage.getItem(k);
+        if (old) {
+          const obj = JSON.parse(old);
+          tree = obj.tree; nextId = obj.nextId || 1;
+          pan = obj.pan || { x: 0, y: 0 };
+          zoom = obj.zoom || 1;
+          selectedId = obj.selectedId || null;
+          sanitize(tree); wrapAsVirtualRootIfNeeded();
+          migrateWeightsTo100(tree);
+          save();
+          return;
+        }
+      } catch (_) {}
+    }
+    tree = defaultTree(); nextId = 1; selectedId = null;
+  }
+  function wrapAsVirtualRootIfNeeded() {
+    if (!isVirtualRoot(tree)) {
+      const oldRoot = tree;
+      tree = { id: VROOT, _isVirtualRoot: true, children: [oldRoot] };
+    }
+  }
+  function sanitize(node) {
+    if (!isVirtualRoot(node)) {
+      if (typeof node.x !== 'number') node.x = 0;
+      if (typeof node.y !== 'number') node.y = 0;
+      if (typeof node.done !== 'boolean') node.done = false;
+      if (typeof node.weight !== 'number' || node.weight <= 0) node.weight = 100;
+      if (node.dueDate === undefined || node.dueDate === '') node.dueDate = null;
+      if (typeof node.createdAt !== 'number') node.createdAt = Date.now();
+      if (typeof node.text !== 'string') node.text = '';
+      delete node.color; delete node.w; delete node.h; delete node.subH;
+    }
+    if (!Array.isArray(node.children)) node.children = [];
+    for (const c of node.children) sanitize(c);
+  }
+  const genId = () => 'n' + (nextId++);
+  function find(id, node = tree, parent = null) {
+    if (node.id === id) return { node, parent };
+    for (const c of node.children) {
+      const r = find(id, c, node);
+      if (r) return r;
+    }
+    return null;
+  }
+  function isDescendant(maybeAncestor, maybeChild) {
+    if (maybeAncestor === maybeChild) return true;
+    for (const c of maybeAncestor.children) if (isDescendant(c, maybeChild)) return true;
+    return false;
+  }
+  function getLevel(node) {
+    let level = 0;
+    let r = find(node.id);
+    while (r && r.parent && !isVirtualRoot(r.parent)) { level++; r = find(r.parent.id); }
+    return level;
+  }
+  function computeProgress(node) {
+    if (node.children.length === 0) return node.done ? 100 : 0;
+    const total = node.children.reduce((s, c) => s + (c.weight || 1), 0);
+    if (total === 0) return 0;
+    let sum = 0;
+    for (const c of node.children) sum += computeProgress(c) * ((c.weight || 1) / total);
+    return sum;
+  }
+  function shareInParent(node) {
+    const r = find(node.id);
+    if (!r || !r.parent || isVirtualRoot(r.parent)) return null;
+    const total = r.parent.children.reduce((s, c) => s + (c.weight || 1), 0);
+    return total ? (node.weight / total) * 100 : 0;
+  }
+  function alertState(node) {
+    const prog = computeProgress(node);
+    if (prog >= 99.9) return 'done';
+    if (!node.dueDate) return 'none';
+    const now = Date.now();
+    const due = new Date(node.dueDate + 'T23:59:59').getTime();
+    if (isNaN(due)) return 'none';
+    if (now > due) return 'overdue';
+    const start = node.createdAt || now;
+    const total = due - start;
+    if (total <= 0) return 'none';
+    const elapsedFrac = (now - start) / total;
+    const progFrac = prog / 100;
+    if (elapsedFrac - progFrac > RISK_THRESHOLD) return 'risk';
+    return 'none';
+  }
+  function formatDateShort(iso) {
+    if (!iso) return '';
+    const d = new Date(iso + 'T00:00:00');
+    if (isNaN(d)) return iso;
+    return `${d.getMonth() + 1}/${d.getDate()}`;
+  }
+  function daysFromNow(iso) {
+    if (!iso) return null;
+    const d = new Date(iso + 'T23:59:59').getTime();
+    return Math.ceil((d - Date.now()) / (1000 * 60 * 60 * 24));
+  }
+
+  const measureCanvas = document.createElement('canvas');
+  const mctx = measureCanvas.getContext('2d');
+  function nodeSize(node) {
+    mctx.font = '13px -apple-system, sans-serif';
+    const w = mctx.measureText(node.text || ' ').width;
+    const right = PCT_HIT_W + LEVEL_W;
+    const total = Math.max(NODE_MIN_W, Math.ceil(w) + NODE_PAD_LEFT + NODE_PAD_RIGHT + right);
+    return { w: total, h: NODE_H };
+  }
+  function center(node) {
+    const sz = nodeSize(node);
+    return { cx: node.x + sz.w / 2, cy: node.y + sz.h / 2, w: sz.w, h: sz.h };
+  }
+  function rectsOverlap(a, b, gap = 0) {
+    return !(a.x + a.w + gap < b.x || b.x + b.w + gap < a.x ||
+             a.y + a.h + gap < b.y || b.y + b.h + gap < a.y);
+  }
+  function overlapArea(a, b) {
+    const dx = Math.max(0, Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x));
+    const dy = Math.max(0, Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y));
+    return dx * dy;
+  }
+  function allNodes(node = tree, out = []) {
+    if (!isVirtualRoot(node)) out.push(node);
+    for (const c of node.children) allNodes(c, out);
+    return out;
+  }
+  function nodeRect(node) {
+    const sz = nodeSize(node);
+    return { x: node.x, y: node.y, w: sz.w, h: sz.h, node };
+  }
+  function findEmptySpot(x, y, w, h) {
+    const others = allNodes().map(nodeRect);
+    function overlapsAny(rx, ry) {
+      const r = { x: rx, y: ry, w, h };
+      for (const o of others) {
+        if (rectsOverlap(r, o, MIN_NODE_GAP)) return true;
+      }
+      return false;
+    }
+    if (!overlapsAny(x, y)) return { x, y };
+    const step = Math.max(w, h) * 0.6;
+    for (let ring = 1; ring <= 40; ring++) {
+      const steps = Math.max(8, ring * 6);
+      for (let i = 0; i < steps; i++) {
+        const angle = (i / steps) * 2 * Math.PI;
+        const tx = x + Math.cos(angle) * step * ring;
+        const ty = y + Math.sin(angle) * step * ring;
+        if (!overlapsAny(tx, ty)) return { x: tx, y: ty };
+      }
+    }
+    return { x, y };
+  }
+  function placeNewChild(parent) {
+    const pc = center(parent);
+    let initial;
+    if (parent.children.length === 0) {
+      initial = { x: pc.cx + 110, y: pc.cy - NODE_H / 2 };
+    } else {
+      const angles = parent.children.map(c => {
+        const cc = center(c);
+        return Math.atan2(cc.cy - pc.cy, cc.cx - pc.cx);
+      });
+      angles.sort((a, b) => a - b);
+      let bestGap = 0, bestMid = 0;
+      for (let i = 0; i < angles.length; i++) {
+        const next = (i === angles.length - 1) ? angles[0] + 2 * Math.PI : angles[i + 1];
+        const gap = next - angles[i];
+        if (gap > bestGap) { bestGap = gap; bestMid = (angles[i] + next) / 2; }
+      }
+      initial = {
+        x: pc.cx + Math.cos(bestMid) * SPAWN_DIST - NODE_MIN_W / 2,
+        y: pc.cy + Math.sin(bestMid) * SPAWN_DIST - NODE_H / 2
+      };
+    }
+    return findEmptySpot(initial.x, initial.y, NODE_MIN_W, NODE_H);
+  }
+  function placeNewTopLevel() {
+    const W = window.innerWidth, H = window.innerHeight;
+    const x = (W / 2 - pan.x) / zoom - NODE_MIN_W / 2;
+    const y = (H / 2 - pan.y) / zoom - NODE_H / 2;
+    return findEmptySpot(x, y, NODE_MIN_W, NODE_H);
+  }
+  function enforceMinDist(movedNode) {
+    const moved = nodeRect(movedNode);
+    const others = allNodes().filter(n => n !== movedNode).map(nodeRect);
+    let tries = 0;
+    while (tries++ < 40) {
+      let collided = false;
+      for (const o of others) {
+        if (rectsOverlap(moved, o, MIN_NODE_GAP)) {
+          collided = true;
+          const acx = moved.x + moved.w / 2;
+          const acy = moved.y + moved.h / 2;
+          const bcx = o.x + o.w / 2;
+          const bcy = o.y + o.h / 2;
+          let dx = acx - bcx, dy = acy - bcy;
+          if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) { dx = 1; dy = 1; }
+          const len = Math.hypot(dx, dy) || 1;
+          movedNode.x += (dx / len) * 6;
+          movedNode.y += (dy / len) * 6;
+          moved.x = movedNode.x; moved.y = movedNode.y;
+        }
+      }
+      if (!collided) break;
+    }
+  }
+  function reparent(node, newParent) {
+    if (isVirtualRoot(node)) return false;
+    if (!isVirtualRoot(newParent) && isDescendant(node, newParent)) return false;
+    const r = find(node.id);
+    if (!r || !r.parent || r.parent === newParent) return false;
+    const idx = r.parent.children.findIndex(c => c.id === node.id);
+    r.parent.children.splice(idx, 1);
+    newParent.children.push(node);
+    return true;
+  }
+  function findReparentCandidate(draggedNode) {
+    if (isVirtualRoot(draggedNode)) return null;
+    const dragRect = nodeRect(draggedNode);
+    const r = find(draggedNode.id);
+    const currentParent = r ? r.parent : null;
+    let best = null, bestArea = 0;
+    for (const n of allNodes()) {
+      if (n === draggedNode) continue;
+      if (isDescendant(draggedNode, n)) continue;
+      if (n === currentParent) continue;
+      const nr = nodeRect(n);
+      if (rectsOverlap(dragRect, nr, 0)) {
+        const area = overlapArea(dragRect, nr);
+        if (area > bestArea) { bestArea = area; best = n; }
+      }
+    }
+    return best;
+  }
+  function collectPositions(node, map = new Map()) {
+    map.set(node.id, { x: node.x, y: node.y });
+    for (const c of node.children) collectPositions(c, map);
+    return map;
+  }
+  function applyDeltaSubtree(node, dx, dy, snapshot) {
+    if (!isVirtualRoot(node)) {
+      const o = snapshot.get(node.id);
+      node.x = o.x + dx; node.y = o.y + dy;
+    }
+    for (const c of node.children) applyDeltaSubtree(c, dx, dy, snapshot);
+  }
+  function snapshotDoneStates(node, out = {}) {
+    if (!isVirtualRoot(node)) out[node.id] = node.done;
+    for (const c of node.children) snapshotDoneStates(c, out);
+    return out;
+  }
+  function restoreDoneStates(node, snap) {
+    if (!isVirtualRoot(node) && snap[node.id] !== undefined) node.done = snap[node.id];
+    for (const c of node.children) restoreDoneStates(c, snap);
+  }
+  function cascadeDone(node, done) {
+    if (!isVirtualRoot(node)) node.done = done;
+    for (const c of node.children) cascadeDone(c, done);
+  }
+
+  // Undo
+  const undoStack = [];
+  function snapshotState() { return JSON.stringify({ tree, nextId, selectedId }); }
+  function pushUndo() {
+    undoStack.push(snapshotState());
+    if (undoStack.length > UNDO_LIMIT) undoStack.shift();
+    updateUndoButton();
+  }
+  function undo() {
+    if (undoStack.length === 0) { showStatus('元に戻せる操作がありません'); return; }
+    closeAllEditors(false);
+    closeModal();
+    dragState = null; reparentTarget = null;
+    const snap = undoStack.pop();
+    try {
+      const obj = JSON.parse(snap);
+      tree = obj.tree; nextId = obj.nextId; selectedId = obj.selectedId;
+      sanitize(tree);
+      if (!isVirtualRoot(tree)) wrapAsVirtualRootIfNeeded();
+    } catch (_) {}
+    save(); render(); updatePanel(); updateUndoButton();
+    showStatus('元に戻しました');
+  }
+  function updateUndoButton() {
+    const btn = document.getElementById('btn-undo');
+    if (btn) btn.disabled = undoStack.length === 0;
+  }
+
+  // Render
+  const svg = document.getElementById('canvas');
+  const vp  = document.getElementById('viewport');
+  const effectsG = document.getElementById('effects');
+  function applyTransform() {
+    const t = `translate(${pan.x},${pan.y}) scale(${zoom})`;
+    vp.setAttribute('transform', t);
+    effectsG.setAttribute('transform', t);
+  }
+
+  // ===== Completion burst effect =====
+  function burstEffect(worldX, worldY) {
+    const startTime = performance.now();
+    const duration = 550;
+    const particles = [];
+    const colors = ['#16a34a', '#22c55e', '#4ade80', '#86efac', '#fbbf24', '#facc15', '#60a5fa'];
+    const numParticles = 14;
+    for (let i = 0; i < numParticles; i++) {
+      const angle = (i / numParticles) * 2 * Math.PI + (Math.random() - 0.5) * 0.4;
+      const speed = 55 + Math.random() * 45;
+      const size = 2 + Math.random() * 2.5;
+      const circle = document.createElementNS(NS, 'circle');
+      circle.setAttribute('cx', worldX);
+      circle.setAttribute('cy', worldY);
+      circle.setAttribute('r', size);
+      circle.setAttribute('fill', colors[Math.floor(Math.random() * colors.length)]);
+      effectsG.appendChild(circle);
+      particles.push({ el: circle, angle, speed, size });
+    }
+    const ring = document.createElementNS(NS, 'circle');
+    ring.setAttribute('cx', worldX);
+    ring.setAttribute('cy', worldY);
+    ring.setAttribute('r', 9);
+    ring.setAttribute('fill', 'none');
+    ring.setAttribute('stroke', '#16a34a');
+    ring.setAttribute('stroke-width', 2.5);
+    effectsG.appendChild(ring);
+    function animate(now) {
+      const elapsed = now - startTime;
+      const t = Math.min(1, elapsed / duration);
+      const ease = 1 - Math.pow(1 - t, 3);
+      for (const p of particles) {
+        const dist = ease * p.speed;
+        const gravity = ease * ease * 8;
+        p.el.setAttribute('cx', worldX + Math.cos(p.angle) * dist);
+        p.el.setAttribute('cy', worldY + Math.sin(p.angle) * dist + gravity);
+        p.el.setAttribute('opacity', Math.max(0, 1 - ease * 1.15));
+        p.el.setAttribute('r', p.size * (1 - ease * 0.55));
+      }
+      ring.setAttribute('r', 9 + ease * 28);
+      ring.setAttribute('opacity', Math.max(0, 1 - ease * 1.05));
+      ring.setAttribute('stroke-width', Math.max(0.5, 2.5 * (1 - ease)));
+      if (t < 1) requestAnimationFrame(animate);
+      else { for (const p of particles) p.el.remove(); ring.remove(); }
+    }
+    requestAnimationFrame(animate);
+  }
+  let reparentTarget = null;
+
+  function edgePath(p, c) {
+    const pc = center(p), cc = center(c);
+    const dx = cc.cx - pc.cx, dy = cc.cy - pc.cy;
+    let cp1x, cp1y, cp2x, cp2y;
+    if (Math.abs(dx) >= Math.abs(dy)) {
+      cp1x = (pc.cx + cc.cx) / 2; cp1y = pc.cy;
+      cp2x = (pc.cx + cc.cx) / 2; cp2y = cc.cy;
+    } else {
+      cp1x = pc.cx; cp1y = (pc.cy + cc.cy) / 2;
+      cp2x = cc.cx; cp2y = (pc.cy + cc.cy) / 2;
+    }
+    return `M ${pc.cx} ${pc.cy} C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${cc.cx} ${cc.cy}`;
+  }
+  function piePath(cx, cy, r, frac) {
+    if (frac <= 0) return '';
+    if (frac >= 1) return `M ${cx} ${cy} m ${-r} 0 a ${r} ${r} 0 1 0 ${2*r} 0 a ${r} ${r} 0 1 0 ${-2*r} 0 Z`;
+    const angle = frac * 2 * Math.PI - Math.PI / 2;
+    const x = cx + r * Math.cos(angle);
+    const y = cy + r * Math.sin(angle);
+    const large = frac > 0.5 ? 1 : 0;
+    return `M ${cx} ${cy} L ${cx} ${cy - r} A ${r} ${r} 0 ${large} 1 ${x} ${y} Z`;
+  }
+  function progressColor(prog, alert) {
+    if (alert === 'overdue') return '#dc2626';
+    if (alert === 'risk') return '#d97706';
+    if (prog >= 99.9) return '#16a34a';
+    return '#64748b';
+  }
+
+  function render() {
+    applyTransform();
+    vp.innerHTML = '';
+    renderEdges(tree);
+    renderNodes(tree);
+  }
+  function renderEdges(node) {
+    if (!isVirtualRoot(node)) {
+      for (const c of node.children) {
+        const d = edgePath(node, c);
+        const hit = document.createElementNS(NS, 'path');
+        hit.setAttribute('d', d);
+        hit.setAttribute('fill', 'none');
+        hit.setAttribute('stroke', 'transparent');
+        hit.setAttribute('stroke-width', 18);
+        hit.setAttribute('pointer-events', 'stroke');
+        hit.setAttribute('class', 'edge-hit');
+        hit.dataset.role = 'edge';
+        hit.dataset.parentId = node.id;
+        hit.dataset.childId = c.id;
+        vp.appendChild(hit);
+        const path = document.createElementNS(NS, 'path');
+        path.setAttribute('d', d);
+        const isDone = computeProgress(c) >= 99.9;
+        path.setAttribute('class', 'edge' + (isDone ? ' done' : ''));
+        vp.appendChild(path);
+      }
+    }
+    for (const c of node.children) renderEdges(c);
+  }
+  function renderNodes(node) {
+    if (isVirtualRoot(node)) {
+      for (const c of node.children) renderNodes(c);
+      return;
+    }
+    const isLeaf = node.children.length === 0;
+    const sz = nodeSize(node);
+    const prog = computeProgress(node);
+    const alert = alertState(node);
+    const isDone = prog >= 99.9;
+    const level = getLevel(node);
+
+    const g = document.createElementNS(NS, 'g');
+    g.dataset.id = node.id;
+
+    const rect = document.createElementNS(NS, 'rect');
+    rect.setAttribute('x', node.x); rect.setAttribute('y', node.y);
+    rect.setAttribute('width', sz.w); rect.setAttribute('height', sz.h);
+    rect.setAttribute('rx', 10); rect.setAttribute('ry', 10);
+    let cls = 'node-rect';
+    if (isDone) cls += ' done';
+    if (alert === 'risk') cls += ' alert-risk';
+    else if (alert === 'overdue') cls += ' alert-overdue';
+    if (node.id === selectedId) cls += ' selected';
+    if (reparentTarget && reparentTarget.id === node.id) cls += ' reparent-target';
+    rect.setAttribute('class', cls);
+    // Level-based stroke width — top levels are thicker for visual hierarchy
+    let sw;
+    if (level === 0) sw = 4;
+    else if (level === 1) sw = 3;
+    else if (level === 2) sw = 2.2;
+    else if (level === 3) sw = 1.8;
+    else sw = 1.5;
+    if (node.id === selectedId) sw += 1.5;
+    else if (alert === 'risk' || alert === 'overdue') sw += 0.5;
+    if (reparentTarget && reparentTarget.id === node.id) sw = Math.max(sw, 3.5);
+    rect.style.strokeWidth = sw + 'px';
+    // Level-based stroke color (overridden by state colors)
+    let strokeColor;
+    if (reparentTarget && reparentTarget.id === node.id) strokeColor = '#16a34a';
+    else if (node.id === selectedId) strokeColor = '#2563eb';
+    else if (alert === 'overdue') strokeColor = '#dc2626';
+    else if (alert === 'risk') strokeColor = '#d97706';
+    else if (isDone) strokeColor = '#16a34a';
+    else if (level === 0) strokeColor = '#2c3e50';
+    else if (level === 1) strokeColor = '#475569';
+    else if (level === 2) strokeColor = '#64748b';
+    else if (level === 3) strokeColor = '#94a3b8';
+    else strokeColor = '#b8bfc8';
+    rect.style.stroke = strokeColor;
+    g.appendChild(rect);
+
+    // Name text
+    const text = document.createElementNS(NS, 'text');
+    text.setAttribute('x', node.x + NODE_PAD_LEFT);
+    text.setAttribute('y', node.y + 16);
+    text.setAttribute('dominant-baseline', 'middle');
+    let tcls = 'node-text';
+    if (isDone) tcls += ' done';
+    text.setAttribute('class', tcls);
+    text.textContent = node.text || ' ';
+    g.appendChild(text);
+
+    // L1+: share % (weight-derived). L0: progress % (auto-computed).
+    const pctText = document.createElementNS(NS, 'text');
+    pctText.setAttribute('x', node.x + sz.w - LEVEL_W - 8);
+    pctText.setAttribute('y', node.y + 16);
+    pctText.setAttribute('text-anchor', 'end');
+    pctText.setAttribute('dominant-baseline', 'middle');
+    pctText.setAttribute('class', 'meta-text');
+    pctText.setAttribute('font-weight', '600');
+    const shareVal = shareInParent(node);
+    pctText.textContent = (shareVal === null ? Math.round(prog) : Math.round(shareVal)) + '%';
+    g.appendChild(pctText);
+
+    // Level badge
+    const levelText = document.createElementNS(NS, 'text');
+    levelText.setAttribute('x', node.x + sz.w - 8);
+    levelText.setAttribute('y', node.y + 16);
+    levelText.setAttribute('text-anchor', 'end');
+    levelText.setAttribute('dominant-baseline', 'middle');
+    levelText.setAttribute('class', 'level-badge');
+    levelText.textContent = 'L' + level;
+    g.appendChild(levelText);
+
+    // Due date (or placeholder)
+    const dueText = document.createElementNS(NS, 'text');
+    dueText.setAttribute('x', node.x + NODE_PAD_LEFT);
+    dueText.setAttribute('y', node.y + 32);
+    dueText.setAttribute('dominant-baseline', 'middle');
+    if (node.dueDate) {
+      let dueCls = 'meta-text';
+      if (alert === 'overdue') dueCls += ' overdue';
+      else if (alert === 'risk') dueCls += ' risk';
+      dueText.setAttribute('class', dueCls);
+      const d = daysFromNow(node.dueDate);
+      let dayStr = '';
+      if (d === 0) dayStr = ' (今日)';
+      else if (d === 1) dayStr = ' (明日)';
+      else if (d > 1) dayStr = ` (あと${d}日)`;
+      else if (d < 0) dayStr = ` (${-d}日超過)`;
+      dueText.textContent = '期日 ' + formatDateShort(node.dueDate) + dayStr;
+    } else {
+      dueText.setAttribute('class', 'meta-text placeholder');
+      dueText.textContent = '+ 期日';
+    }
+    g.appendChild(dueText);
+
+    // Progress bar
+    const barX = node.x + 8;
+    const barY = node.y + sz.h - 8;
+    const barW = sz.w - 16;
+    const barBg = document.createElementNS(NS, 'rect');
+    barBg.setAttribute('x', barX); barBg.setAttribute('y', barY);
+    barBg.setAttribute('width', barW); barBg.setAttribute('height', 4);
+    barBg.setAttribute('rx', 2);
+    barBg.setAttribute('class', 'progress-bg');
+    barBg.setAttribute('fill', 'rgba(0,0,0,0.07)');
+    g.appendChild(barBg);
+    if (prog > 0) {
+      const barFill = document.createElementNS(NS, 'rect');
+      barFill.setAttribute('x', barX); barFill.setAttribute('y', barY);
+      barFill.setAttribute('width', Math.max(2, (prog / 100) * barW));
+      barFill.setAttribute('height', 4); barFill.setAttribute('rx', 2);
+      barFill.setAttribute('class', 'progress-fill');
+      barFill.setAttribute('fill', progressColor(prog, alert));
+      g.appendChild(barFill);
+    }
+
+    // ===== Hit areas (on top of text/progress, below check) =====
+    // Name hit: top row, between check and pct area
+    const nameHit = document.createElementNS(NS, 'rect');
+    nameHit.setAttribute('x', node.x + NODE_PAD_LEFT);
+    nameHit.setAttribute('y', node.y);
+    nameHit.setAttribute('width', sz.w - NODE_PAD_LEFT - PCT_HIT_W - LEVEL_W);
+    nameHit.setAttribute('height', 24);
+    nameHit.setAttribute('class', 'name-hit');
+    nameHit.dataset.role = 'name-hit';
+    nameHit.dataset.id = node.id;
+    g.appendChild(nameHit);
+    // Pct hit
+    const pctHit = document.createElementNS(NS, 'rect');
+    pctHit.setAttribute('x', node.x + sz.w - PCT_HIT_W - LEVEL_W);
+    pctHit.setAttribute('y', node.y);
+    pctHit.setAttribute('width', PCT_HIT_W);
+    pctHit.setAttribute('height', 24);
+    pctHit.setAttribute('class', 'pct-hit');
+    pctHit.dataset.role = 'pct-hit';
+    pctHit.dataset.id = node.id;
+    g.appendChild(pctHit);
+    // Due hit
+    const dueHit = document.createElementNS(NS, 'rect');
+    dueHit.setAttribute('x', node.x + NODE_PAD_LEFT);
+    dueHit.setAttribute('y', node.y + 22);
+    dueHit.setAttribute('width', sz.w - NODE_PAD_LEFT - 8);
+    dueHit.setAttribute('height', 16);
+    dueHit.setAttribute('class', 'due-hit');
+    dueHit.dataset.role = 'due-hit';
+    dueHit.dataset.id = node.id;
+    g.appendChild(dueHit);
+
+    // ===== Check circle (on top of hit areas) =====
+    const ccx = node.x + 15;
+    const ccy = node.y + 16;
+    const radius = 9;
+    const bg = document.createElementNS(NS, 'circle');
+    bg.setAttribute('cx', ccx); bg.setAttribute('cy', ccy);
+    bg.setAttribute('r', radius);
+    bg.setAttribute('class', 'check-bg');
+    bg.setAttribute('fill', 'white');
+    bg.setAttribute('stroke', '#94a3b8');
+    bg.setAttribute('stroke-width', 1.4);
+    g.appendChild(bg);
+    if (isLeaf) {
+      if (node.done) {
+        const f = document.createElementNS(NS, 'circle');
+        f.setAttribute('cx', ccx); f.setAttribute('cy', ccy);
+        f.setAttribute('r', radius);
+        f.setAttribute('fill', '#16a34a'); f.setAttribute('stroke', '#15803d');
+        f.setAttribute('stroke-width', 1.4);
+        g.appendChild(f);
+        const m = document.createElementNS(NS, 'path');
+        m.setAttribute('d', `M ${ccx - 4} ${ccy} L ${ccx - 1} ${ccy + 3} L ${ccx + 4.5} ${ccy - 3}`);
+        m.setAttribute('class', 'check-mark');
+        m.setAttribute('stroke', 'white'); m.setAttribute('stroke-width', 2);
+        m.setAttribute('fill', 'none');
+        m.setAttribute('stroke-linecap', 'round'); m.setAttribute('stroke-linejoin', 'round');
+        g.appendChild(m);
+      }
+    } else {
+      const frac = prog / 100;
+      if (node.done) {
+        const f = document.createElementNS(NS, 'circle');
+        f.setAttribute('cx', ccx); f.setAttribute('cy', ccy);
+        f.setAttribute('r', radius);
+        f.setAttribute('fill', '#16a34a'); f.setAttribute('stroke', '#15803d');
+        f.setAttribute('stroke-width', 1.4);
+        g.appendChild(f);
+        const m = document.createElementNS(NS, 'path');
+        m.setAttribute('d', `M ${ccx - 4} ${ccy} L ${ccx - 1} ${ccy + 3} L ${ccx + 4.5} ${ccy - 3}`);
+        m.setAttribute('stroke', 'white'); m.setAttribute('stroke-width', 2);
+        m.setAttribute('fill', 'none');
+        m.setAttribute('stroke-linecap', 'round'); m.setAttribute('stroke-linejoin', 'round');
+        g.appendChild(m);
+      } else if (frac > 0) {
+        const pie = document.createElementNS(NS, 'path');
+        pie.setAttribute('d', piePath(ccx, ccy, radius - 1, frac));
+        pie.setAttribute('fill', progressColor(prog, alert));
+        pie.setAttribute('class', 'pie-fill');
+        g.appendChild(pie);
+      }
+    }
+    const hit = document.createElementNS(NS, 'circle');
+    hit.setAttribute('cx', ccx); hit.setAttribute('cy', ccy);
+    hit.setAttribute('r', 14);
+    hit.setAttribute('class', 'check-hit');
+    hit.dataset.role = 'check';
+    hit.dataset.id = node.id;
+    g.appendChild(hit);
+
+    vp.appendChild(g);
+    for (const c of node.children) renderNodes(c);
+  }
+
+  // Operations
+  function selectNode(id) { selectedId = id; save(); render(); updatePanel(); }
+  function addChild() {
+    if (!selectedId) { addTopLevel(); return; }
+    const r = find(selectedId);
+    if (!r) return;
+    pushUndo();
+    const pos = placeNewChild(r.node);
+    const child = { id: genId(), text: '', done: false, x: pos.x, y: pos.y, weight: 100, dueDate: null, createdAt: Date.now(), children: [] };
+    r.node.children.push(child);
+    selectedId = child.id;
+    enforceMinDist(child);
+    save(); render();
+    startEdit(child.id, true);
+  }
+  function addSibling() {
+    if (!selectedId) { addTopLevel(); return; }
+    const r = find(selectedId);
+    if (!r || !r.parent) return;
+    pushUndo();
+    const pos = isVirtualRoot(r.parent) ? placeNewTopLevel() : placeNewChild(r.parent);
+    const sib = { id: genId(), text: '', done: false, x: pos.x, y: pos.y, weight: 100, dueDate: null, createdAt: Date.now(), children: [] };
+    const idx = r.parent.children.findIndex(c => c.id === selectedId);
+    r.parent.children.splice(idx + 1, 0, sib);
+    selectedId = sib.id;
+    enforceMinDist(sib);
+    save(); render();
+    startEdit(sib.id, true);
+  }
+  function addTopLevel() {
+    pushUndo();
+    const pos = placeNewTopLevel();
+    const node = { id: genId(), text: '', done: false, x: pos.x, y: pos.y, weight: 100, dueDate: null, createdAt: Date.now(), children: [] };
+    tree.children.push(node);
+    selectedId = node.id;
+    enforceMinDist(node);
+    save(); render();
+    startEdit(node.id, true);
+  }
+  function deleteNode() {
+    if (!selectedId) return;
+    const r = find(selectedId);
+    if (!r || !r.parent) return;
+    const cnt = allNodes(r.node).length - 1;
+    if (cnt > 0 && !confirm(`子タスク ${cnt} 件も削除されます。よろしいですか？`)) return;
+    pushUndo();
+    const idx = r.parent.children.findIndex(c => c.id === selectedId);
+    r.parent.children.splice(idx, 1);
+    selectedId = isVirtualRoot(r.parent) ? (tree.children[0] ? tree.children[0].id : null) : r.parent.id;
+    save(); render(); updatePanel();
+  }
+  function toggleDone(id) {
+    const r = find(id || selectedId);
+    if (!r || !r.node || isVirtualRoot(r.node)) return;
+    pushUndo();
+    const node = r.node;
+    let becameDone = false;
+    if (node.children.length === 0) {
+      node.done = !node.done;
+      becameDone = node.done;
+    } else {
+      if (node.done) {
+        if (node._snapshot) { restoreDoneStates(node, node._snapshot); node._snapshot = null; }
+        else cascadeDone(node, false);
+        node.done = false;
+      } else {
+        node._snapshot = snapshotDoneStates(node);
+        cascadeDone(node, true);
+        node.done = true;
+        becameDone = true;
+      }
+    }
+    save(); render(); updatePanel();
+    if (becameDone) burstEffect(node.x + 15, node.y + 16);
+  }
+  function setShareInParent(weight) {
+    const r = find(selectedId);
+    if (!r || isVirtualRoot(r.node)) return;
+    pushUndo();
+    r.node.weight = Math.max(5, Math.min(100, weight));
+    save(); render(); updatePanel();
+  }
+  function setDueDate(d) {
+    const r = find(selectedId);
+    if (!r) return;
+    pushUndo();
+    r.node.dueDate = d || null;
+    save(); render(); updatePanel();
+  }
+  function disconnectEdge(parentId, childId) {
+    const rc = find(childId);
+    if (!rc || !rc.parent || rc.parent.id !== parentId) return;
+    pushUndo();
+    reparent(rc.node, tree);
+    selectedId = childId;
+    save(); render(); updatePanel();
+    showStatus('「' + (rc.node.text || '...') + '」を独立タスクに');
+  }
+
+  // ===== Same-level confirm modal =====
+  const modalEl = document.getElementById('modal-backdrop');
+  const modalTitle = document.getElementById('modal-title');
+  const modalBody = document.getElementById('modal-body-text');
+  const modalBtnTarget = document.getElementById('modal-btn-target');
+  const modalBtnDragged = document.getElementById('modal-btn-dragged');
+  const modalBtnCancel = document.getElementById('modal-btn-cancel');
+  let modalActive = false;
+  function askParentChoice(dragged, target, level, onChoose) {
+    modalActive = true;
+    const dn = dragged.text || '(無題)';
+    const tn = target.text || '(無題)';
+    modalTitle.textContent = '同じ序列のタスクです';
+    modalBody.textContent = `「${dn}」と「${tn}」はどちらも序列 ${level} です。どちらを親タスクにしますか？`;
+    modalBtnTarget.textContent = `「${tn}」を親にする (「${dn}」を子に)`;
+    modalBtnDragged.textContent = `「${dn}」を親にする (「${tn}」を子に)`;
+    modalEl.classList.remove('hidden');
+    function cleanup(r) {
+      modalActive = false; modalEl.classList.add('hidden');
+      modalBtnTarget.onclick = modalBtnDragged.onclick = modalBtnCancel.onclick = null;
+      onChoose(r);
+    }
+    modalBtnTarget.onclick = () => cleanup('target');
+    modalBtnDragged.onclick = () => cleanup('dragged');
+    modalBtnCancel.onclick = () => cleanup('cancel');
+  }
+  function closeModal() {
+    if (!modalActive) return;
+    modalActive = false; modalEl.classList.add('hidden');
+    modalBtnTarget.onclick = modalBtnDragged.onclick = modalBtnCancel.onclick = null;
+  }
+  function commitDrop(draggedNode, targetNode) {
+    if (!targetNode) { enforceMinDist(draggedNode); save(); render(); updatePanel(); return; }
+    const tl = getLevel(targetNode);
+    reparent(draggedNode, targetNode);
+    showStatus('「' + (draggedNode.text || '...') + '」を「' + (targetNode.text || '...') + '」の子に (序列 ' + (tl + 1) + ')');
+    enforceMinDist(draggedNode);
+    save(); render(); updatePanel();
+  }
+
+  // ===== Inline editors =====
+  const editor = document.getElementById('editor');
+  const shareEditor = document.getElementById('share-editor');
+  const shareEditorWrap = document.getElementById('share-editor-wrap');
+  const dueEditor = document.getElementById('due-editor');
+  let editingId = null;
+  let editingIsNew = false;
+  let editingShareId = null;
+  let editingDueId = null;
+
+  function closeAllEditors(commit = true) {
+    if (editingId !== null) finishEdit(commit);
+    if (editingShareId !== null) finishEditShare(commit);
+    if (editingDueId !== null) finishEditDue(commit);
+  }
+
+  // Name editor
+  function startEdit(id, isNew = false) {
+    const r = find(id);
+    if (!r || isVirtualRoot(r.node)) return;
+    if (editingShareId !== null) finishEditShare(true);
+    if (editingDueId !== null) finishEditDue(true);
+    if (editingId === id && !isNew) return;
+    if (editingId !== null) finishEdit(true);
+    editingId = id; editingIsNew = isNew;
+    selectedId = id;
+    editor.value = r.node.text;
+    editor.style.display = 'block';
+    const sz = nodeSize(r.node);
+    const rect = svg.getBoundingClientRect();
+    const sx = pan.x + r.node.x * zoom + rect.left;
+    const sy = pan.y + r.node.y * zoom + rect.top;
+    editor.style.left = sx + 'px';
+    editor.style.top  = sy + 'px';
+    editor.style.width  = Math.max(160, sz.w * zoom) + 'px';
+    editor.style.height = (24 * zoom) + 'px';
+    setTimeout(() => { editor.focus(); editor.select(); }, 0);
+  }
+  function finishEdit(commit = true) {
+    if (editingId === null) return;
+    const id = editingId, isNew = editingIsNew;
+    editingId = null; editingIsNew = false;
+    editor.style.display = 'none';
+    const r = find(id);
+    if (!r) { save(); render(); return; }
+    const oldText = r.node.text;
+    const newText = editor.value.trim();
+    if (commit) {
+      if (isNew) r.node.text = newText || '新しいタスク';
+      else if (newText !== oldText) { pushUndo(); r.node.text = newText; }
+    } else if (isNew && !newText) {
+      const idx = r.parent.children.findIndex(c => c.id === id);
+      if (idx >= 0) {
+        r.parent.children.splice(idx, 1);
+        selectedId = isVirtualRoot(r.parent) ? (tree.children[0] ? tree.children[0].id : null) : r.parent.id;
+      }
+      if (undoStack.length > 0) undoStack.pop();
+      updateUndoButton();
+    }
+    save(); render(); updatePanel();
+  }
+  editor.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); finishEdit(true); }
+    else if (e.key === 'Escape') { e.preventDefault(); finishEdit(false); }
+    else if (e.key === 'Tab') { e.preventDefault(); finishEdit(true); addChild(); }
+  });
+  editor.addEventListener('blur', () => { if (editingId !== null) finishEdit(true); });
+
+  // Share editor
+  function startEditShare(id) {
+    const r = find(id);
+    if (!r || isVirtualRoot(r.node)) return;
+    if (!r.parent || isVirtualRoot(r.parent)) { showStatus('独立タスクは重み設定の影響はありません'); return; }
+    if (editingId !== null) finishEdit(true);
+    if (editingDueId !== null) finishEditDue(true);
+    if (editingShareId === id) return;
+    if (editingShareId !== null) finishEditShare(true);
+    editingShareId = id;
+    selectedId = id;
+    const sz = nodeSize(r.node);
+    const rect = svg.getBoundingClientRect();
+    const sx = pan.x + (r.node.x + sz.w - PCT_HIT_W - LEVEL_W) * zoom + rect.left;
+    const sy = pan.y + (r.node.y + 2) * zoom + rect.top;
+    shareEditorWrap.style.left = (sx - 64) + 'px';
+    shareEditorWrap.style.top  = sy + 'px';
+    shareEditor.value = Math.max(5, Math.min(100, Math.round(r.node.weight)));
+    shareEditorWrap.classList.add('visible');
+    render(); updatePanel();
+    setTimeout(() => { shareEditor.focus(); shareEditor.select(); }, 0);
+  }
+  function finishEditShare(commit = true) {
+    if (editingShareId === null) return;
+    const id = editingShareId;
+    editingShareId = null;
+    shareEditorWrap.classList.remove('visible');
+    if (commit) {
+      selectedId = id;
+      const v = parseFloat(shareEditor.value);
+      if (!isNaN(v) && v > 0) setShareInParent(v);
+    }
+  }
+  shareEditor.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); finishEditShare(true); }
+    else if (e.key === 'Escape') { e.preventDefault(); finishEditShare(false); }
+  });
+  shareEditor.addEventListener('blur', () => { if (editingShareId !== null) finishEditShare(true); });
+
+  // Due editor
+  function startEditDue(id) {
+    const r = find(id);
+    if (!r || isVirtualRoot(r.node)) return;
+    if (editingId !== null) finishEdit(true);
+    if (editingShareId !== null) finishEditShare(true);
+    if (editingDueId === id) return;
+    if (editingDueId !== null) finishEditDue(true);
+    editingDueId = id;
+    selectedId = id;
+    const rect = svg.getBoundingClientRect();
+    const sx = pan.x + (r.node.x + NODE_PAD_LEFT - 4) * zoom + rect.left;
+    const sy = pan.y + (r.node.y + 22) * zoom + rect.top;
+    dueEditor.style.left = sx + 'px';
+    dueEditor.style.top  = sy + 'px';
+    dueEditor.value = r.node.dueDate || '';
+    dueEditor.style.display = 'block';
+    render(); updatePanel();
+    setTimeout(() => { dueEditor.focus(); }, 0);
+  }
+  function finishEditDue(commit = true) {
+    if (editingDueId === null) return;
+    const id = editingDueId;
+    editingDueId = null;
+    dueEditor.style.display = 'none';
+    if (commit) {
+      selectedId = id;
+      setDueDate(dueEditor.value);
+    }
+  }
+  dueEditor.addEventListener('change', () => { if (editingDueId !== null) finishEditDue(true); });
+  dueEditor.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); finishEditDue(true); }
+    else if (e.key === 'Escape') { e.preventDefault(); finishEditDue(false); }
+  });
+  dueEditor.addEventListener('blur', () => { if (editingDueId !== null) finishEditDue(true); });
+
+  // ===== Pan / drag =====
+  let panState = null;
+  let dragState = null;
+  let pinch = null;
+  let touchStartTarget = null;
+  let lastTapTime = 0;
+  let lastTapId = null;
+  let lastClickTime = 0;
+  let lastClickId = null;
+  let lastClickRole = null;
+
+  svg.addEventListener('mousedown', e => {
+    if (e.button !== 0) return;
+    const t = e.target;
+    if (t.dataset && (t.dataset.role === 'check' || t.dataset.role === 'edge')) return;
+    if (t.tagName === 'rect' && t.parentNode.dataset.id) return;
+    panState = { sx: e.clientX, sy: e.clientY, px: pan.x, py: pan.y, moved: false };
+    svg.classList.add('grabbing');
+  });
+
+  window.addEventListener('mousemove', e => {
+    if (dragState) {
+      const dx = (e.clientX - dragState.sx) / zoom;
+      const dy = (e.clientY - dragState.sy) / zoom;
+      if (!dragState.moved && Math.hypot(e.clientX - dragState.sx, e.clientY - dragState.sy) > 4) {
+        dragState.moved = true;
+        svg.classList.add('dragging-node');
+      }
+      if (dragState.moved) {
+        applyDeltaSubtree(dragState.node, dx, dy, dragState.snapshot);
+        reparentTarget = findReparentCandidate(dragState.node);
+        render();
+      }
+    } else if (panState) {
+      if (!panState.moved && Math.hypot(e.clientX - panState.sx, e.clientY - panState.sy) > 4) panState.moved = true;
+      if (panState.moved) {
+        pan.x = panState.px + (e.clientX - panState.sx);
+        pan.y = panState.py + (e.clientY - panState.sy);
+        applyTransform();
+      }
+    }
+  });
+
+  window.addEventListener('mouseup', () => {
+    if (dragState) {
+      svg.classList.remove('dragging-node');
+      if (dragState.moved) {
+        undoStack.push(dragState.preSnap);
+        if (undoStack.length > UNDO_LIMIT) undoStack.shift();
+        updateUndoButton();
+        const dn = dragState.node;
+        const tn = reparentTarget;
+        reparentTarget = null;
+        dragState = null;
+        render();
+        commitDrop(dn, tn);
+      } else {
+        const role = dragState.startRole;
+        const id = dragState.node.id;
+        dragState = null;
+        reparentTarget = null;
+        if (role === 'pct-hit') { startEditShare(id); lastClickTime = 0; }
+        else if (role === 'due-hit') { startEditDue(id); lastClickTime = 0; }
+        else {
+          // name-hit / rect: single-click=select, double-click=edit name
+          const now = Date.now();
+          if (now - lastClickTime < 400 && lastClickId === id && lastClickRole === role) {
+            startEdit(id);
+            lastClickTime = 0;
+          } else {
+            selectNode(id);
+            lastClickTime = now;
+            lastClickId = id;
+            lastClickRole = role;
+          }
+        }
+      }
+    } else if (panState) {
+      if (panState.moved) save();
+      else if (selectedId !== null) {
+        selectedId = null;
+        save();
+        render();
+        updatePanel();
+      }
+      panState = null;
+      svg.classList.remove('grabbing');
+    }
+  });
+
+  svg.addEventListener('wheel', e => {
+    e.preventDefault();
+    const delta = -e.deltaY * 0.0015;
+    const nz = Math.max(0.3, Math.min(2.5, zoom * (1 + delta)));
+    const rect = svg.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    pan.x = mx - (mx - pan.x) * (nz / zoom);
+    pan.y = my - (my - pan.y) * (nz / zoom);
+    zoom = nz;
+    applyTransform();
+    save();
+  }, { passive: false });
+
+  svg.addEventListener('touchstart', e => {
+    const t = e.target;
+    if (e.touches.length === 1) {
+      touchStartTarget = t;
+      if (t.dataset && (t.dataset.role === 'check' || t.dataset.role === 'edge')) return;
+      if (t.tagName === 'rect' && t.parentNode.dataset.id) return;
+      const tp = e.touches[0];
+      panState = { sx: tp.clientX, sy: tp.clientY, px: pan.x, py: pan.y, moved: false };
+    } else if (e.touches.length === 2) {
+      const t1 = e.touches[0], t2 = e.touches[1];
+      const d = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
+      pinch = { d, cx: (t1.clientX + t2.clientX) / 2, cy: (t1.clientY + t2.clientY) / 2,
+                z: zoom, px: pan.x, py: pan.y };
+      panState = null; dragState = null;
+    }
+  }, { passive: true });
+
+  svg.addEventListener('touchmove', e => {
+    if (e.touches.length === 1) {
+      const tp = e.touches[0];
+      if (dragState) {
+        if (!dragState.moved && Math.hypot(tp.clientX - dragState.sx, tp.clientY - dragState.sy) > 6) dragState.moved = true;
+        if (dragState.moved) {
+          e.preventDefault();
+          const dx = (tp.clientX - dragState.sx) / zoom;
+          const dy = (tp.clientY - dragState.sy) / zoom;
+          applyDeltaSubtree(dragState.node, dx, dy, dragState.snapshot);
+          reparentTarget = findReparentCandidate(dragState.node);
+          render();
+        }
+      } else if (panState) {
+        if (!panState.moved && Math.hypot(tp.clientX - panState.sx, tp.clientY - panState.sy) > 6) panState.moved = true;
+        if (panState.moved) {
+          e.preventDefault();
+          pan.x = panState.px + (tp.clientX - panState.sx);
+          pan.y = panState.py + (tp.clientY - panState.sy);
+          applyTransform();
+        }
+      }
+    } else if (e.touches.length === 2 && pinch) {
+      e.preventDefault();
+      const t1 = e.touches[0], t2 = e.touches[1];
+      const d = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
+      const nz = Math.max(0.3, Math.min(2.5, pinch.z * (d / pinch.d)));
+      pan.x = pinch.cx - (pinch.cx - pinch.px) * (nz / pinch.z);
+      pan.y = pinch.cy - (pinch.cy - pinch.py) * (nz / pinch.z);
+      zoom = nz;
+      applyTransform();
+    }
+  }, { passive: false });
+
+  svg.addEventListener('touchend', e => {
+    if (e.touches.length === 0) {
+      if (dragState) {
+        if (dragState.moved) {
+          undoStack.push(dragState.preSnap);
+          if (undoStack.length > UNDO_LIMIT) undoStack.shift();
+          updateUndoButton();
+          const dn = dragState.node;
+          const tn = reparentTarget;
+          reparentTarget = null;
+          dragState = null;
+          render();
+          commitDrop(dn, tn);
+        } else {
+          // tap dispatch based on the starting role
+          const t = touchStartTarget;
+          const role = t && t.dataset && t.dataset.role;
+          const id = dragState.node.id;
+          dragState = null;
+          reparentTarget = null;
+          if (role === 'pct-hit') {
+            startEditShare(id);
+            e.preventDefault();
+          } else if (role === 'due-hit') {
+            startEditDue(id);
+            e.preventDefault();
+          } else {
+            // name-hit or rect bg: select / double-tap = edit name
+            const now = Date.now();
+            if (now - lastTapTime < DBL_TAP_MS && lastTapId === id) {
+              startEdit(id);
+              lastTapTime = 0;
+              e.preventDefault();
+            } else {
+              selectNode(id);
+              lastTapTime = now;
+              lastTapId = id;
+            }
+          }
+        }
+      } else if (touchStartTarget) {
+        // No dragState (check, edge, or background tap)
+        const t = touchStartTarget;
+        const role = t.dataset && t.dataset.role;
+        if (role === 'check') {
+          toggleDone(t.dataset.id);
+          e.preventDefault();
+        } else if (role === 'edge') {
+          disconnectEdge(t.dataset.parentId, t.dataset.childId);
+          e.preventDefault();
+        }
+        if (panState) {
+          if (panState.moved) save();
+          else if (!role && selectedId !== null) {
+            selectedId = null;
+            save();
+            render();
+            updatePanel();
+          }
+          panState = null;
+        }
+      } else if (panState) {
+        if (panState.moved) save();
+        else if (selectedId !== null) {
+          selectedId = null;
+          save();
+          render();
+          updatePanel();
+        }
+        panState = null;
+      }
+      pinch = null;
+      touchStartTarget = null;
+    }
+  });
+
+  // Node drag (capture phase) — any rect inside g[data-id] starts a drag,
+  // including the bg rect and the name/pct/due hit areas.
+  svg.addEventListener('mousedown', e => {
+    if (e.button !== 0) return;
+    const t = e.target;
+    if (t.dataset && (t.dataset.role === 'check' || t.dataset.role === 'edge')) { e.stopPropagation(); return; }
+    if (t.tagName === 'rect' && t.parentNode.dataset.id) {
+      const id = t.parentNode.dataset.id;
+      const r = find(id);
+      if (!r) return;
+      e.stopPropagation();
+      dragState = {
+        node: r.node, sx: e.clientX, sy: e.clientY,
+        snapshot: collectPositions(r.node), moved: false,
+        preSnap: snapshotState(),
+        startRole: (t.dataset && t.dataset.role) || 'rect'
+      };
+    }
+  }, true);
+
+  svg.addEventListener('touchstart', e => {
+    if (e.touches.length !== 1) return;
+    const t = e.target;
+    if (t.dataset && (t.dataset.role === 'check' || t.dataset.role === 'edge')) return;
+    if (t.tagName === 'rect' && t.parentNode.dataset.id) {
+      const id = t.parentNode.dataset.id;
+      const r = find(id);
+      if (!r) return;
+      const tp = e.touches[0];
+      dragState = {
+        node: r.node, sx: tp.clientX, sy: tp.clientY,
+        snapshot: collectPositions(r.node), moved: false,
+        preSnap: snapshotState(),
+        startRole: (t.dataset && t.dataset.role) || 'rect'
+      };
+      panState = null;
+    }
+  }, true);
+
+  // Click handlers
+  svg.addEventListener('click', e => {
+    const t = e.target;
+    if (t.dataset && t.dataset.role === 'check') {
+      toggleDone(t.dataset.id);
+      e.stopPropagation();
+    } else if (t.dataset && t.dataset.role === 'edge') {
+      disconnectEdge(t.dataset.parentId, t.dataset.childId);
+      e.stopPropagation();
+    }
+  });
+
+  // Double-click: dispatch by role
+  svg.addEventListener('dblclick', e => {
+    const t = e.target;
+    if (t.tagName === 'rect' && t.parentNode.dataset.id) {
+      const id = t.parentNode.dataset.id;
+      const role = t.dataset && t.dataset.role;
+      e.preventDefault();
+      if (role === 'pct-hit') startEditShare(id);
+      else if (role === 'due-hit') startEditDue(id);
+      else startEdit(id);
+    }
+  });
+
+  // Toolbar
+  document.getElementById('btn-undo').onclick        = undo;
+  document.getElementById('btn-add-toplevel').onclick = addTopLevel;
+  document.getElementById('btn-add-child').onclick   = addChild;
+  document.getElementById('btn-add-sibling').onclick = addSibling;
+  document.getElementById('btn-edit').onclick        = () => { if (selectedId) startEdit(selectedId); };
+  document.getElementById('btn-delete').onclick      = deleteNode;
+  document.getElementById('btn-fit').onclick         = fitView;
+  document.getElementById('btn-reset').onclick       = () => {
+    if (!confirm('全てクリアして最初からやり直しますか？')) return;
+    pushUndo();
+    tree = defaultTree(); nextId = 1; selectedId = null;
+    zoom = 1; pan = { x: window.innerWidth / 2, y: window.innerHeight / 2 };
+    save(); render(); updatePanel();
+  };
+
+  // Bottom panel
+  const propsEl = document.getElementById('props');
+  const propShareInput = document.getElementById('prop-share-input');
+  const propDue = document.getElementById('prop-due');
+  const propDueClear = document.getElementById('prop-due-clear');
+  const propProgress = document.getElementById('prop-progress');
+  const propStatus = document.getElementById('prop-status');
+  const propLevel = document.getElementById('prop-level');
+  const propShareDisplay = document.getElementById('prop-share-display');
+
+  function updatePanel() {
+    if (!selectedId) { propsEl.classList.add('hidden'); return; }
+    const r = find(selectedId);
+    if (!r || isVirtualRoot(r.node)) { propsEl.classList.add('hidden'); return; }
+    propsEl.classList.remove('hidden');
+    propLevel.textContent = 'L' + getLevel(r.node);
+    const parentIsVRoot = isVirtualRoot(r.parent);
+    const share = shareInParent(r.node);
+    propShareInput.disabled = parentIsVRoot;
+    propShareInput.value = Math.max(5, Math.round(r.node.weight));
+    propShareDisplay.textContent = share === null ? '占有率 —' : `占有率 ${Math.round(share)}%`;
+    propDue.value = r.node.dueDate || '';
+    const prog = computeProgress(r.node);
+    propProgress.textContent = `進捗 ${Math.round(prog)}%`;
+    const a = alertState(r.node);
+    propStatus.className = 'status-chip ' + a;
+    if (a === 'done') propStatus.textContent = '完了';
+    else if (a === 'overdue') {
+      const d = daysFromNow(r.node.dueDate);
+      propStatus.textContent = `期限超過 (${-d}日)`;
+    } else if (a === 'risk') propStatus.textContent = '遅延気味';
+    else if (r.node.dueDate) {
+      const d = daysFromNow(r.node.dueDate);
+      propStatus.textContent = d === 0 ? '今日締切' : (d > 0 ? `あと${d}日` : '');
+      propStatus.className = 'status-chip ok';
+    } else {
+      propStatus.textContent = '期日未設定';
+      propStatus.className = 'status-chip none';
+    }
+  }
+  propShareInput.addEventListener('change', () => {
+    const v = parseFloat(propShareInput.value);
+    if (isNaN(v) || v <= 0) { propShareInput.value = 50; setShareInParent(50); return; }
+    setShareInParent(v);
+  });
+  propDue.addEventListener('change', () => setDueDate(propDue.value));
+  propDueClear.addEventListener('click', () => { propDue.value = ''; setDueDate(null); });
+
+  function fitView() {
+    const list = allNodes();
+    if (list.length === 0) {
+      pan = { x: window.innerWidth / 2, y: window.innerHeight / 2 };
+      zoom = 1; applyTransform(); save(); return;
+    }
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const n of list) {
+      const sz = nodeSize(n);
+      minX = Math.min(minX, n.x); minY = Math.min(minY, n.y);
+      maxX = Math.max(maxX, n.x + sz.w); maxY = Math.max(maxY, n.y + sz.h);
+    }
+    const W = window.innerWidth, H = window.innerHeight;
+    const padding = 80;
+    const dx = maxX - minX || 1, dy = maxY - minY || 1;
+    const sx = (W - padding * 2) / dx;
+    const sy = (H - padding * 2 - 120) / dy;
+    zoom = Math.min(1.2, Math.min(sx, sy));
+    pan.x = (W - dx * zoom) / 2 - minX * zoom;
+    pan.y = (H - dy * zoom) / 2 - minY * zoom + 20;
+    applyTransform(); save();
+  }
+
+  document.addEventListener('keydown', e => {
+    if (modalActive) {
+      if (e.key === 'Escape') { e.preventDefault(); modalBtnCancel.click(); }
+      return;
+    }
+    if (editingId !== null || editingShareId !== null || editingDueId !== null) return;
+    const tn = e.target.tagName;
+    if (tn === 'INPUT' || tn === 'TEXTAREA') return;
+    if (e.metaKey || e.ctrlKey) {
+      if (e.key === 'z' && !e.shiftKey) { e.preventDefault(); undo(); return; }
+      return;
+    }
+    if (e.altKey) return;
+    if (e.key === 'Tab') { e.preventDefault(); addChild(); }
+    else if (e.key === 'Enter') { e.preventDefault(); addSibling(); }
+    else if (e.key === 'F2') { e.preventDefault(); if (selectedId) startEdit(selectedId); }
+    else if (e.key === ' ') { e.preventDefault(); toggleDone(); }
+    else if (e.key === 'Delete' || (e.key === 'Backspace' && e.shiftKey)) {
+      e.preventDefault(); deleteNode();
+    }
+  });
+
+  const statusEl = document.getElementById('status');
+  let statusTimer;
+  function showStatus(text) {
+    statusEl.textContent = text;
+    statusEl.classList.add('show');
+    clearTimeout(statusTimer);
+    statusTimer = setTimeout(() => statusEl.classList.remove('show'), 2400);
+  }
+
+  function resize() {
+    svg.setAttribute('width', window.innerWidth);
+    svg.setAttribute('height', window.innerHeight);
+  }
+  window.addEventListener('resize', () => { resize(); render(); });
+
+  load();
+  resize();
+
+  if (tree.children.length === 0) {
+    pan = { x: window.innerWidth / 2, y: window.innerHeight / 2 };
+    save();
+    showStatus('「＋新規」で最初のタスクを作成');
+  } else if (!selectedId || !find(selectedId)) {
+    selectedId = tree.children[0].id;
+  }
+
+  updateUndoButton();
+  render();
+  updatePanel();
+
+  setInterval(() => { render(); updatePanel(); }, 60000);
+})();
+</script>
+<script>
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('./service-worker.js').catch(() => {});
+    });
+  }
+</script>
+</body>
+</html>
