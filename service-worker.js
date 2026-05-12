@@ -1,4 +1,4 @@
-const CACHE_NAME = 'task-tree-v4';
+const CACHE_NAME = 'task-tree-v5';
 const ASSETS = [
   './',
   './index.html',

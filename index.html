@@ -320,6 +320,7 @@
   <g id="viewport"></g>
   <g id="effects" style="pointer-events:none"></g>
 </svg>
+<div id="debug-hud" style="position:fixed;top:60px;left:8px;background:rgba(0,0,0,0.78);color:#0f0;font-family:monospace;font-size:10px;line-height:1.3;padding:5px 7px;border-radius:6px;z-index:100;pointer-events:none;white-space:pre;display:none;max-width:200px;"></div>
 
 <input id="editor"        type="text"   autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
 <div id="share-editor-wrap">
@@ -358,6 +359,22 @@
 <script>
 (() => {
   const NS = 'http://www.w3.org/2000/svg';
+
+  // ===== Debug HUD (enabled via URL hash #debug) =====
+  const DEBUG = location.hash.includes('debug');
+  const debugHud = document.getElementById('debug-hud');
+  const debugLog = [];
+  function dbg(s) {
+    if (!DEBUG || !debugHud) return;
+    debugLog.unshift(((Date.now() / 1000) % 100).toFixed(2) + ' ' + s);
+    if (debugLog.length > 16) debugLog.length = 16;
+    debugHud.textContent = debugLog.join('\n');
+  }
+  if (DEBUG && debugHud) {
+    debugHud.style.display = 'block';
+    dbg('DEBUG ON');
+  }
+
   const KEY = 'tasktree_v5';
   const OLD_KEYS = ['tasktree_v4', 'tasktree_v3', 'tasktree_v2', 'tasktree_v1'];
   const VROOT = '__vroot__';
@@ -1437,11 +1454,14 @@
       const tp = e.touches[0];
       panState = { sx: tp.clientX, sy: tp.clientY, px: pan.x, py: pan.y, moved: false };
     } else if (e.touches.length === 2) {
+      dbg('TS 2fingers drag=' + (dragState ? 'keep' : 'pinch'));
+      // Keep ongoing drag when a 2nd finger appears — don't wipe dragState.
+      if (dragState) return;
       const t1 = e.touches[0], t2 = e.touches[1];
       const d = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
       pinch = { d, cx: (t1.clientX + t2.clientX) / 2, cy: (t1.clientY + t2.clientY) / 2,
                 z: zoom, px: pan.x, py: pan.y };
-      panState = null; dragState = null;
+      panState = null;
     }
   }, { passive: true });
 
@@ -1516,9 +1536,11 @@
       const tp = e.touches[0];
       if (dragState) {
         e.preventDefault();
-        if (!dragState.moved && Math.hypot(tp.clientX - dragState.sx, tp.clientY - dragState.sy) > 3) {
+        const dist = Math.hypot(tp.clientX - dragState.sx, tp.clientY - dragState.sy);
+        if (!dragState.moved && dist > 3) {
           dragState.moved = true;
           startDragVisual(dragState.node);
+          dbg('DRAG START d=' + dist.toFixed(0));
         }
         if (dragState.moved) {
           const dx = (tp.clientX - dragState.sx) / zoom;
@@ -1549,6 +1571,7 @@
   }, { passive: false });
 
   svg.addEventListener('touchend', e => {
+    dbg('TE rem=' + e.touches.length + ' drag=' + (dragState ? (dragState.moved ? 'M' : 'set') : '-') + ' pan=' + (panState ? 'set' : '-'));
     if (e.touches.length === 0) {
       if (dragState) {
         if (dragState.moved) {
@@ -1628,6 +1651,7 @@
 
   // touchcancel: browser interrupted the touch (gesture nav, phone call, etc.)
   svg.addEventListener('touchcancel', () => {
+    dbg('TCANCEL drag=' + (dragState ? 'set' : '-'));
     if (dragState && dragState.moved) {
       // commit position changes already applied, but skip reparent
       endDragVisual();
@@ -1670,13 +1694,19 @@
   }, true);
 
   svg.addEventListener('touchstart', e => {
-    if (e.touches.length !== 1) return;
+    if (e.touches.length !== 1) {
+      dbg('TSc touches=' + e.touches.length + ' skip');
+      return;
+    }
     const t = e.target;
+    const role = (t.dataset && t.dataset.role) || '';
+    dbg('TSc tag=' + t.tagName + ' role=' + role);
     if (t.dataset && (t.dataset.role === 'check' || t.dataset.role === 'edge')) return;
     if (t.tagName === 'rect' && t.parentNode.dataset.id) {
       const id = t.parentNode.dataset.id;
       const r = find(id);
       if (!r) return;
+      e.preventDefault();  // suppress browser gestures & synthesized click
       const tp = e.touches[0];
       dragState = {
         node: r.node, sx: tp.clientX, sy: tp.clientY,
@@ -1685,8 +1715,9 @@
         startRole: (t.dataset && t.dataset.role) || 'rect'
       };
       panState = null;
+      dbg('DRAG SET id=' + id.slice(0, 6));
     }
-  }, true);
+  }, { capture: true, passive: false });
 
   // Click handlers
   svg.addEventListener('click', e => {
