@@ -1442,18 +1442,28 @@
     }
   }, { passive: true });
 
+  let dragRenderScheduled = false;
+  function scheduleDragRender() {
+    if (dragRenderScheduled) return;
+    dragRenderScheduled = true;
+    requestAnimationFrame(() => {
+      dragRenderScheduled = false;
+      render();
+    });
+  }
+
   svg.addEventListener('touchmove', e => {
     if (e.touches.length === 1) {
       const tp = e.touches[0];
       if (dragState) {
         e.preventDefault();
-        if (!dragState.moved && Math.hypot(tp.clientX - dragState.sx, tp.clientY - dragState.sy) > 6) dragState.moved = true;
+        if (!dragState.moved && Math.hypot(tp.clientX - dragState.sx, tp.clientY - dragState.sy) > 3) dragState.moved = true;
         if (dragState.moved) {
           const dx = (tp.clientX - dragState.sx) / zoom;
           const dy = (tp.clientY - dragState.sy) / zoom;
           applyDeltaSubtree(dragState.node, dx, dy, dragState.snapshot);
           reparentTarget = findReparentCandidate(dragState.node);
-          render();
+          scheduleDragRender();
         }
       } else if (panState) {
         e.preventDefault();
