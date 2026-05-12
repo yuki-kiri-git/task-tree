@@ -441,6 +441,68 @@
     #drawer-content { flex-direction: column; gap: 16px; padding: 12px 14px; }
   }
 
+  /* Sync modal */
+  #sync-modal {
+    position: fixed; inset: 0;
+    background: rgba(20, 25, 35, 0.45);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 35; padding: 20px;
+  }
+  #sync-modal.hidden { display: none; }
+  #sync-content {
+    background: white;
+    border-radius: 14px;
+    padding: 22px 24px;
+    min-width: 320px;
+    max-width: 480px;
+    width: 100%;
+    position: relative;
+    box-shadow: 0 16px 50px rgba(0,0,0,0.3);
+    color: #2c3e50;
+    max-height: 86vh;
+    overflow-y: auto;
+  }
+  #sync-content h3 { margin: 0 0 14px; font-size: 16px; font-weight: 700; }
+  .sync-close-x {
+    position: absolute;
+    top: 8px; right: 10px;
+    background: transparent;
+    border: none;
+    font-size: 22px;
+    color: #888;
+    cursor: pointer;
+    padding: 2px 8px;
+    border-radius: 4px;
+  }
+  .sync-close-x:hover { background: #f0ebe2; color: #2c3e50; }
+  .sync-section { margin-bottom: 16px; padding-bottom: 16px; border-bottom: 1px solid #eee; }
+  .sync-section:last-child { margin-bottom: 0; padding-bottom: 0; border-bottom: none; }
+  .sync-section h4 { margin: 0 0 6px; font-size: 13px; font-weight: 700; color: #2c3e50; }
+  .sync-section p { margin: 0 0 8px; font-size: 12px; color: #555; line-height: 1.5; }
+  .ws-key-display {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    background: #f1f1ee;
+    padding: 8px 10px;
+    border-radius: 6px;
+    font-size: 11px;
+    word-break: break-all;
+    margin-bottom: 8px;
+    color: #2c3e50;
+  }
+  .ws-input {
+    width: 100%;
+    padding: 8px 10px;
+    border: 1px solid #ddd5c8;
+    border-radius: 6px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+    box-sizing: border-box;
+    margin-bottom: 8px;
+    color: #2c3e50;
+    background: white;
+  }
+  .sync-btn-row { display: flex; gap: 8px; flex-wrap: wrap; }
+
   /* Parent-choice modal */
   #modal-backdrop {
     position: fixed; inset: 0;
@@ -499,6 +561,7 @@
   <div class="group">
     <button class="btn" id="btn-fit">全体表示</button>
     <button class="btn" id="btn-reset">リセット</button>
+    <button class="btn icon" id="btn-sync" title="同期">🔄</button>
   </div>
   <span class="hint">名前=Wクリック ・%/期日=タップ ・◯=完了 ・ドラッグ=移動 ・重ねて親変更 ・線=連携解除</span>
 </div>
@@ -546,6 +609,14 @@
       <div id="routine-list"></div>
       <button id="routine-add-btn" type="button">＋ 項目を追加</button>
     </section>
+  </div>
+</div>
+
+<div id="sync-modal" class="hidden">
+  <div id="sync-content">
+    <button class="sync-close-x" id="sync-close-x" type="button">×</button>
+    <h3>🔄 デバイス間同期</h3>
+    <div id="sync-modal-body"></div>
   </div>
 </div>
 
@@ -605,8 +676,12 @@
   const defaultTree = () => ({ id: VROOT, _isVirtualRoot: true, children: [] });
   const isVirtualRoot = (node) => node && node._isVirtualRoot === true;
 
-  function save() {
+  function saveLocal() {
     try { localStorage.setItem(KEY, JSON.stringify({ tree, nextId, pan, zoom, selectedId, weightScale: 100 })); } catch (_) {}
+  }
+  function save() {
+    saveLocal();
+    if (!isApplyingRemote) saveToCloudDebounced();
   }
   function migrateWeightsTo100(node) {
     if (!isVirtualRoot(node) && typeof node.weight === 'number') {
@@ -2082,6 +2157,256 @@
   }
   window.addEventListener('resize', () => { resize(); render(); });
 
+  // ===== Cross-device sync (Firebase Realtime Database) =====
+  const FIREBASE_CONFIG = {
+    apiKey: "AIzaSyDLdd40xwL-YFaDHOlNkT_1PnqD1uuPtlo",
+    authDomain: "task-tree-sync.firebaseapp.com",
+    databaseURL: "https://task-tree-sync-default-rtdb.asia-southeast1.firebasedatabase.app",
+    projectId: "task-tree-sync",
+    storageBucket: "task-tree-sync.firebasestorage.app",
+    messagingSenderId: "659381866689",
+    appId: "1:659381866689:web:d79ea2385dca47072b4440"
+  };
+  const SYNC_KEY_STORAGE = 'tasktree_sync_v1';
+  let syncEnabled = false;
+  let syncWsKey = null;
+  let syncDB = null;
+  let syncFns = null;
+  let syncListenerOff = null;
+  let isApplyingRemote = false;
+  let firebaseSaveTimer = null;
+  let firebasePushInFlight = false;
+
+  async function loadFirebase() {
+    if (syncDB && syncFns) return true;
+    try {
+      const appMod = await import('https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js');
+      const dbMod = await import('https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js');
+      const app = appMod.initializeApp(FIREBASE_CONFIG);
+      syncDB = dbMod.getDatabase(app);
+      syncFns = dbMod;
+      return true;
+    } catch (e) {
+      showStatus('Firebase 接続失敗: ' + (e && e.message || e));
+      return false;
+    }
+  }
+
+  function generateWsKey() {
+    const bytes = new Uint8Array(20);
+    crypto.getRandomValues(bytes);
+    return 'ws-' + Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
+  }
+
+  function applyRemoteData(data) {
+    if (!data) return;
+    if (editingId !== null) finishEdit(false);
+    if (editingShareId !== null) finishEditShare(false);
+    if (editingDueId !== null) finishEditDue(false);
+    isApplyingRemote = true;
+    try {
+      if (data.tree) {
+        tree = data.tree;
+        nextId = data.nextId || nextId;
+        selectedId = data.selectedId || null;
+        sanitize(tree);
+        wrapAsVirtualRootIfNeeded();
+      }
+      if (data.drawer && Array.isArray(data.drawer.goals) && Array.isArray(data.drawer.routines)) {
+        drawerData = data.drawer;
+      }
+      saveLocal();
+      saveDrawerLocal();
+      render();
+      renderDrawer();
+      updatePanel();
+    } finally {
+      isApplyingRemote = false;
+    }
+  }
+
+  function startSyncListener() {
+    if (!syncEnabled || !syncFns || !syncDB || !syncWsKey) return;
+    stopSyncListener();
+    const wsRef = syncFns.ref(syncDB, 'workspaces/' + syncWsKey);
+    syncListenerOff = syncFns.onValue(wsRef, snap => {
+      if (firebasePushInFlight) return;
+      if (snap.exists()) applyRemoteData(snap.val());
+    });
+  }
+  function stopSyncListener() {
+    if (syncListenerOff) { try { syncListenerOff(); } catch (_) {} syncListenerOff = null; }
+  }
+
+  function saveToCloudDebounced() {
+    if (!syncEnabled || isApplyingRemote) return;
+    if (firebaseSaveTimer) clearTimeout(firebaseSaveTimer);
+    firebaseSaveTimer = setTimeout(pushDataToCloud, 400);
+  }
+  async function pushDataToCloud() {
+    firebaseSaveTimer = null;
+    if (!syncEnabled || !syncFns || !syncDB || !syncWsKey) return;
+    try {
+      firebasePushInFlight = true;
+      const wsRef = syncFns.ref(syncDB, 'workspaces/' + syncWsKey);
+      await syncFns.set(wsRef, {
+        tree, nextId,
+        selectedId: selectedId || null,
+        drawer: drawerData,
+        updatedAt: Date.now()
+      });
+    } catch (e) {
+      showStatus('クラウド保存エラー: ' + (e && e.message || e));
+    } finally {
+      // Release after a short delay so the listener echo is ignored
+      setTimeout(() => { firebasePushInFlight = false; }, 250);
+    }
+  }
+
+  async function enableSyncWithNewKey() {
+    if (!(await loadFirebase())) return null;
+    syncWsKey = generateWsKey();
+    localStorage.setItem(SYNC_KEY_STORAGE, syncWsKey);
+    syncEnabled = true;
+    await pushDataToCloud();
+    startSyncListener();
+    updateSyncButton();
+    return syncWsKey;
+  }
+
+  async function enableSyncWithKey(key) {
+    key = String(key || '').trim();
+    if (key.length < 20) { showStatus('キーが短すぎます (20文字以上)'); return false; }
+    if (!(await loadFirebase())) return false;
+    syncWsKey = key;
+    try {
+      const wsRef = syncFns.ref(syncDB, 'workspaces/' + syncWsKey);
+      const snap = await syncFns.get(wsRef);
+      if (snap.exists()) applyRemoteData(snap.val());
+      else { showStatus('そのキーのデータがありません'); return false; }
+    } catch (e) {
+      showStatus('取得エラー: ' + (e && e.message || e));
+      return false;
+    }
+    localStorage.setItem(SYNC_KEY_STORAGE, syncWsKey);
+    syncEnabled = true;
+    startSyncListener();
+    updateSyncButton();
+    return true;
+  }
+
+  function disableSync() {
+    stopSyncListener();
+    syncEnabled = false;
+    syncWsKey = null;
+    if (firebaseSaveTimer) { clearTimeout(firebaseSaveTimer); firebaseSaveTimer = null; }
+    localStorage.removeItem(SYNC_KEY_STORAGE);
+    updateSyncButton();
+  }
+
+  async function initSync() {
+    const stored = localStorage.getItem(SYNC_KEY_STORAGE);
+    if (!stored) { updateSyncButton(); return; }
+    if (!(await loadFirebase())) return;
+    syncWsKey = stored;
+    syncEnabled = true;
+    updateSyncButton();
+    try {
+      const wsRef = syncFns.ref(syncDB, 'workspaces/' + syncWsKey);
+      const snap = await syncFns.get(wsRef);
+      if (snap.exists()) applyRemoteData(snap.val());
+      else await pushDataToCloud();
+    } catch (e) {
+      showStatus('初期同期失敗: ' + (e && e.message || e));
+    }
+    startSyncListener();
+  }
+
+  function updateSyncButton() {
+    const btn = document.getElementById('btn-sync');
+    if (!btn) return;
+    btn.style.color = syncEnabled ? '#16a34a' : '';
+    btn.title = syncEnabled ? '同期中 (タップで詳細)' : '同期 (タップで設定)';
+  }
+
+  function openSyncModal() {
+    const modal = document.getElementById('sync-modal');
+    const body = document.getElementById('sync-modal-body');
+    body.innerHTML = '';
+    if (syncEnabled) {
+      body.innerHTML = `
+        <div class="sync-section">
+          <h4>✅ 同期中</h4>
+          <p>このデバイスは下記のワークスペースに接続中です。</p>
+          <div class="ws-key-display" id="sync-cur-key"></div>
+          <div class="sync-btn-row">
+            <button class="btn" id="sync-copy-btn">📋 キーをコピー</button>
+          </div>
+        </div>
+        <div class="sync-section">
+          <h4>もう片方のデバイスでの参加方法</h4>
+          <p>他のデバイスでこのアプリを開き、同期ボタン (🔄) → 「既存ワークスペースに参加」で上記キーを入力してください。</p>
+        </div>
+        <div class="sync-section">
+          <h4>同期を停止</h4>
+          <p>このデバイスでの同期を解除します（クラウド上のデータは消えません）。</p>
+          <button class="btn danger" id="sync-disable-btn">このデバイスでの同期を停止</button>
+        </div>
+      `;
+      document.getElementById('sync-cur-key').textContent = syncWsKey;
+      document.getElementById('sync-copy-btn').onclick = async () => {
+        try { await navigator.clipboard.writeText(syncWsKey); showStatus('キーをコピーしました'); }
+        catch (_) { showStatus('コピーできませんでした (手動で選択してください)'); }
+      };
+      document.getElementById('sync-disable-btn').onclick = () => {
+        if (!confirm('このデバイスでの同期を停止しますか？\n(クラウド上のデータは残ります)')) return;
+        disableSync();
+        closeSyncModal();
+      };
+    } else {
+      body.innerHTML = `
+        <div class="sync-section">
+          <h4>新規ワークスペース作成</h4>
+          <p>このデバイスのデータをクラウドにアップロードし、ワークスペースキーを発行します。<br>その後、他端末でこのキーを入力すれば同じデータを共有できます。</p>
+          <button class="btn primary" id="sync-new-btn">このデバイスから開始</button>
+        </div>
+        <div class="sync-section">
+          <h4>既存ワークスペースに参加</h4>
+          <p>別の端末で発行されたキーを入力します。<br><strong style="color:#dc2626">注意: このデバイスのローカルデータはクラウド側のデータで上書きされます。</strong></p>
+          <input type="text" class="ws-input" id="sync-join-input" placeholder="ws-xxxxxxxxxxxxxxxxxxxxxxxx" autocomplete="off">
+          <button class="btn" id="sync-join-btn">キーで参加</button>
+        </div>
+      `;
+      document.getElementById('sync-new-btn').onclick = async () => {
+        const btn = document.getElementById('sync-new-btn');
+        btn.disabled = true; btn.textContent = '処理中...';
+        const key = await enableSyncWithNewKey();
+        if (key) { showStatus('同期を開始しました'); openSyncModal(); }
+        else btn.disabled = false;
+      };
+      document.getElementById('sync-join-btn').onclick = async () => {
+        const inp = document.getElementById('sync-join-input');
+        const key = inp.value.trim();
+        if (!key) { showStatus('キーを入力してください'); return; }
+        if (!confirm('このデバイスのローカルデータはクラウド側のデータで上書きされます。\n続行しますか？')) return;
+        const btn = document.getElementById('sync-join-btn');
+        btn.disabled = true; btn.textContent = '接続中...';
+        const ok = await enableSyncWithKey(key);
+        if (ok) { showStatus('同期に参加しました'); openSyncModal(); }
+        else { btn.disabled = false; btn.textContent = 'キーで参加'; }
+      };
+    }
+    modal.classList.remove('hidden');
+  }
+  function closeSyncModal() {
+    document.getElementById('sync-modal').classList.add('hidden');
+  }
+  document.getElementById('btn-sync').addEventListener('click', openSyncModal);
+  document.getElementById('sync-close-x').addEventListener('click', closeSyncModal);
+  document.getElementById('sync-modal').addEventListener('click', (e) => {
+    if (e.target.id === 'sync-modal') closeSyncModal();
+  });
+
   // ===== Bottom drawer: goals & routines =====
   const DRAWER_KEY = 'tasktree_drawer_v1';
   const drawerEl = document.getElementById('drawer');
@@ -2123,8 +2448,12 @@
       routines: defaultRoutines()
     };
   }
-  function saveDrawer() {
+  function saveDrawerLocal() {
     try { localStorage.setItem(DRAWER_KEY, JSON.stringify(drawerData)); } catch (_) {}
+  }
+  function saveDrawer() {
+    saveDrawerLocal();
+    if (!isApplyingRemote) saveToCloudDebounced();
   }
 
   function autoSizeTextarea(el, min) {
@@ -2256,6 +2585,9 @@
   updateUndoButton();
   render();
   updatePanel();
+
+  // Start cross-device sync in background (non-blocking)
+  initSync();
 
   setInterval(() => { if (!dragVisualActive) { render(); updatePanel(); } }, 60000);
 })();
