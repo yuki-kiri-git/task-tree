@@ -1545,6 +1545,7 @@
     save(); render(); updatePanel();
   }
   editor.addEventListener('keydown', e => {
+    if (e.isComposing || e.keyCode === 229) return;  // IME中はスキップ（日本語変換確定が誤って commit されないように）
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); finishEdit(true); }
     else if (e.key === 'Escape') { e.preventDefault(); finishEdit(false); }
     else if (e.key === 'Tab') { e.preventDefault(); finishEdit(true); addChild(); }
@@ -1585,6 +1586,7 @@
     }
   }
   shareEditor.addEventListener('keydown', e => {
+    if (e.isComposing || e.keyCode === 229) return;
     if (e.key === 'Enter') { e.preventDefault(); finishEditShare(true); }
     else if (e.key === 'Escape') { e.preventDefault(); finishEditShare(false); }
   });
@@ -1622,6 +1624,7 @@
   }
   dueEditor.addEventListener('change', () => { if (editingDueId !== null) finishEditDue(true); });
   dueEditor.addEventListener('keydown', e => {
+    if (e.isComposing || e.keyCode === 229) return;
     if (e.key === 'Enter') { e.preventDefault(); finishEditDue(true); }
     else if (e.key === 'Escape') { e.preventDefault(); finishEditDue(false); }
   });
