@@ -320,6 +320,7 @@
     margin-bottom: 12px;
   }
   .tier-label {
+    display: block;
     width: 100%;
     border: none;
     background: transparent;
@@ -330,6 +331,13 @@
     padding: 4px 6px;
     border-bottom: 1px solid #ddd5c8;
     box-sizing: border-box;
+    resize: none;
+    overflow: hidden;
+    line-height: 1.4;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+    min-height: 26px;
   }
   .tier-label:focus {
     outline: none;
@@ -337,6 +345,7 @@
     background: rgba(37, 99, 235, 0.04);
   }
   .tier-text {
+    display: block;
     width: 100%;
     border: none;
     background: transparent;
@@ -349,6 +358,9 @@
     line-height: 1.5;
     box-sizing: border-box;
     overflow: hidden;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
   }
   .tier-text:focus {
     outline: none;
@@ -364,9 +376,10 @@
     display: grid;
     grid-template-columns: 90px 1fr 28px;
     gap: 8px;
-    align-items: center;
+    align-items: start;
   }
   .routine-label, .routine-text {
+    display: block;
     border: none;
     background: transparent;
     font-family: inherit;
@@ -375,9 +388,17 @@
     border-bottom: 1px solid #ddd5c8;
     box-sizing: border-box;
     width: 100%;
+    resize: none;
+    overflow: hidden;
+    line-height: 1.4;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+    min-height: 28px;
   }
   .routine-label { font-size: 12px; font-weight: 700; color: #475569; }
   .routine-text  { font-size: 13px; }
+  .routine-remove { margin-top: 4px; }
   .routine-label:focus, .routine-text:focus {
     outline: none;
     border-bottom-color: #2563eb;
@@ -2106,21 +2127,23 @@
     try { localStorage.setItem(DRAWER_KEY, JSON.stringify(drawerData)); } catch (_) {}
   }
 
-  function autoSizeTextarea(el) {
+  function autoSizeTextarea(el, min) {
+    if (typeof min !== 'number') min = 28;
     el.style.height = 'auto';
-    el.style.height = Math.max(40, el.scrollHeight) + 'px';
+    el.style.height = Math.max(min, el.scrollHeight) + 'px';
   }
 
   function createGoalTierEl(idx, tier) {
     const wrap = document.createElement('div');
     wrap.className = 'tier';
-    const label = document.createElement('input');
-    label.type = 'text';
+    const label = document.createElement('textarea');
     label.className = 'tier-label';
+    label.rows = 1;
     label.value = tier.label || '';
     label.placeholder = 'タイトル';
     label.addEventListener('input', () => {
       drawerData.goals[idx].label = label.value;
+      autoSizeTextarea(label, 26);
       saveDrawer();
     });
     const text = document.createElement('textarea');
@@ -2130,34 +2153,36 @@
     text.rows = 2;
     text.addEventListener('input', () => {
       drawerData.goals[idx].text = text.value;
-      autoSizeTextarea(text);
+      autoSizeTextarea(text, 40);
       saveDrawer();
     });
     wrap.appendChild(label);
     wrap.appendChild(text);
-    setTimeout(() => autoSizeTextarea(text), 0);
+    setTimeout(() => { autoSizeTextarea(label, 26); autoSizeTextarea(text, 40); }, 0);
     return wrap;
   }
 
   function createRoutineItemEl(idx, item) {
     const wrap = document.createElement('div');
     wrap.className = 'routine-item';
-    const label = document.createElement('input');
-    label.type = 'text';
+    const label = document.createElement('textarea');
     label.className = 'routine-label';
+    label.rows = 1;
     label.value = item.label || '';
     label.placeholder = '項目名';
     label.addEventListener('input', () => {
       drawerData.routines[idx].label = label.value;
+      autoSizeTextarea(label, 28);
       saveDrawer();
     });
-    const text = document.createElement('input');
-    text.type = 'text';
+    const text = document.createElement('textarea');
     text.className = 'routine-text';
+    text.rows = 1;
     text.value = item.text || '';
     text.placeholder = '何をする？';
     text.addEventListener('input', () => {
       drawerData.routines[idx].text = text.value;
+      autoSizeTextarea(text, 28);
       saveDrawer();
     });
     const remove = document.createElement('button');
@@ -2173,6 +2198,7 @@
     wrap.appendChild(label);
     wrap.appendChild(text);
     wrap.appendChild(remove);
+    setTimeout(() => { autoSizeTextarea(label, 28); autoSizeTextarea(text, 28); }, 0);
     return wrap;
   }
 
@@ -2207,7 +2233,9 @@
     saveDrawer();
     if (open) {
       // resize all textareas after layout
-      drawerEl.querySelectorAll('.tier-text').forEach(t => autoSizeTextarea(t));
+      drawerEl.querySelectorAll('.tier-label').forEach(t => autoSizeTextarea(t, 26));
+      drawerEl.querySelectorAll('.tier-text').forEach(t => autoSizeTextarea(t, 40));
+      drawerEl.querySelectorAll('.routine-label, .routine-text').forEach(t => autoSizeTextarea(t, 28));
     }
   }
   drawerHandle.addEventListener('click', () => setDrawerExpanded(!drawerData.expanded));
