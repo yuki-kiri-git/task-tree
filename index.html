@@ -1334,6 +1334,7 @@
 
   svg.addEventListener('mousedown', e => {
     if (e.button !== 0) return;
+    if (Date.now() - lastTouchEnd < 500) return;  // ignore synthesized mouse after touch
     const t = e.target;
     if (t.dataset && (t.dataset.role === 'check' || t.dataset.role === 'edge')) return;
     if (t.tagName === 'rect' && t.parentNode.dataset.id) return;
@@ -1345,14 +1346,15 @@
     if (dragState) {
       const dx = (e.clientX - dragState.sx) / zoom;
       const dy = (e.clientY - dragState.sy) / zoom;
-      if (!dragState.moved && Math.hypot(e.clientX - dragState.sx, e.clientY - dragState.sy) > 4) {
+      if (!dragState.moved && Math.hypot(e.clientX - dragState.sx, e.clientY - dragState.sy) > 3) {
         dragState.moved = true;
         svg.classList.add('dragging-node');
+        startDragVisual(dragState.node);
       }
       if (dragState.moved) {
         applyDeltaSubtree(dragState.node, dx, dy, dragState.snapshot);
         reparentTarget = findReparentCandidate(dragState.node);
-        render();
+        updateDragVisual(dx, dy, reparentTarget);
       }
     } else if (panState) {
       if (!panState.moved && Math.hypot(e.clientX - panState.sx, e.clientY - panState.sy) > 4) panState.moved = true;
@@ -1368,6 +1370,7 @@
     if (dragState) {
       svg.classList.remove('dragging-node');
       if (dragState.moved) {
+        endDragVisual();
         undoStack.push(dragState.preSnap);
         if (undoStack.length > UNDO_LIMIT) undoStack.shift();
         updateUndoButton();
@@ -1442,14 +1445,70 @@
     }
   }, { passive: true });
 
-  let dragRenderScheduled = false;
-  function scheduleDragRender() {
-    if (dragRenderScheduled) return;
-    dragRenderScheduled = true;
-    requestAnimationFrame(() => {
-      dragRenderScheduled = false;
-      render();
-    });
+  // Drag visualization: avoid full render() during drag to prevent DOM thrashing
+  let dragSubtreeGroups = null;
+  let dragHiddenEdges = null;
+  let dragReparentTargetEl = null;
+  let dragVisualActive = false;
+  let lastTouchEnd = 0;
+
+  function startDragVisual(node) {
+    if (dragVisualActive) endDragVisual();
+    const ids = new Set();
+    (function collect(n) {
+      if (!isVirtualRoot(n)) ids.add(n.id);
+      for (const c of n.children) collect(c);
+    })(node);
+    dragSubtreeGroups = [];
+    for (const id of ids) {
+      const g = vp.querySelector('g[data-id="' + id + '"]');
+      if (g) dragSubtreeGroups.push(g);
+    }
+    dragHiddenEdges = Array.from(vp.querySelectorAll('path.edge, path.edge-hit'));
+    for (const e of dragHiddenEdges) e.style.display = 'none';
+    dragVisualActive = true;
+  }
+
+  function updateDragVisual(dx, dy, target) {
+    if (!dragVisualActive) return;
+    const t = 'translate(' + dx + ',' + dy + ')';
+    for (const g of dragSubtreeGroups) g.setAttribute('transform', t);
+    const targetId = target ? target.id : null;
+    const currentId = dragReparentTargetEl ? dragReparentTargetEl.dataset.id : null;
+    if (currentId !== targetId) {
+      if (dragReparentTargetEl) {
+        const rect = dragReparentTargetEl.querySelector('rect.node-rect');
+        if (rect) rect.classList.remove('reparent-target');
+      }
+      if (targetId) {
+        const g = vp.querySelector('g[data-id="' + targetId + '"]');
+        if (g) {
+          const rect = g.querySelector('rect.node-rect');
+          if (rect) rect.classList.add('reparent-target');
+        }
+        dragReparentTargetEl = g;
+      } else {
+        dragReparentTargetEl = null;
+      }
+    }
+  }
+
+  function endDragVisual() {
+    if (!dragVisualActive) return;
+    if (dragSubtreeGroups) {
+      for (const g of dragSubtreeGroups) g.removeAttribute('transform');
+    }
+    if (dragHiddenEdges) {
+      for (const e of dragHiddenEdges) e.style.display = '';
+    }
+    if (dragReparentTargetEl) {
+      const rect = dragReparentTargetEl.querySelector('rect.node-rect');
+      if (rect) rect.classList.remove('reparent-target');
+    }
+    dragSubtreeGroups = null;
+    dragHiddenEdges = null;
+    dragReparentTargetEl = null;
+    dragVisualActive = false;
   }
 
   svg.addEventListener('touchmove', e => {
@@ -1457,13 +1516,16 @@
       const tp = e.touches[0];
       if (dragState) {
         e.preventDefault();
-        if (!dragState.moved && Math.hypot(tp.clientX - dragState.sx, tp.clientY - dragState.sy) > 3) dragState.moved = true;
+        if (!dragState.moved && Math.hypot(tp.clientX - dragState.sx, tp.clientY - dragState.sy) > 3) {
+          dragState.moved = true;
+          startDragVisual(dragState.node);
+        }
         if (dragState.moved) {
           const dx = (tp.clientX - dragState.sx) / zoom;
           const dy = (tp.clientY - dragState.sy) / zoom;
           applyDeltaSubtree(dragState.node, dx, dy, dragState.snapshot);
           reparentTarget = findReparentCandidate(dragState.node);
-          scheduleDragRender();
+          updateDragVisual(dx, dy, reparentTarget);
         }
       } else if (panState) {
         e.preventDefault();
@@ -1490,6 +1552,7 @@
     if (e.touches.length === 0) {
       if (dragState) {
         if (dragState.moved) {
+          endDragVisual();
           undoStack.push(dragState.preSnap);
           if (undoStack.length > UNDO_LIMIT) undoStack.shift();
           updateUndoButton();
@@ -1559,13 +1622,37 @@
       }
       pinch = null;
       touchStartTarget = null;
+      lastTouchEnd = Date.now();
     }
+  });
+
+  // touchcancel: browser interrupted the touch (gesture nav, phone call, etc.)
+  svg.addEventListener('touchcancel', () => {
+    if (dragState && dragState.moved) {
+      // commit position changes already applied, but skip reparent
+      endDragVisual();
+      undoStack.push(dragState.preSnap);
+      if (undoStack.length > UNDO_LIMIT) undoStack.shift();
+      updateUndoButton();
+      enforceMinDist(dragState.node);
+      save();
+    } else {
+      endDragVisual();
+    }
+    dragState = null;
+    reparentTarget = null;
+    panState = null;
+    pinch = null;
+    touchStartTarget = null;
+    lastTouchEnd = Date.now();
+    render();
   });
 
   // Node drag (capture phase) — any rect inside g[data-id] starts a drag,
   // including the bg rect and the name/pct/due hit areas.
   svg.addEventListener('mousedown', e => {
     if (e.button !== 0) return;
+    if (Date.now() - lastTouchEnd < 500) return;  // ignore synthesized mouse after touch
     const t = e.target;
     if (t.dataset && (t.dataset.role === 'check' || t.dataset.role === 'edge')) { e.stopPropagation(); return; }
     if (t.tagName === 'rect' && t.parentNode.dataset.id) {
@@ -1765,13 +1852,15 @@
   render();
   updatePanel();
 
-  setInterval(() => { render(); updatePanel(); }, 60000);
+  setInterval(() => { if (!dragVisualActive) { render(); updatePanel(); } }, 60000);
 })();
 </script>
 <script>
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
-      navigator.serviceWorker.register('./service-worker.js').catch(() => {});
+      navigator.serviceWorker.register('./service-worker.js', { updateViaCache: 'none' })
+        .then(reg => { try { reg.update(); } catch (_) {} })
+        .catch(() => {});
     });
   }
 </script>
